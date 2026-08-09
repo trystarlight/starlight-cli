@@ -9,4 +9,4 @@ Before creating an immutable `vX.Y.Z` tag:
 3. Confirm the hosted service accepts this driver protocol and version floor.
 4. Review every commit since the previous tag and confirm the package version.
 
-The release workflow uses npm trusted publishing with GitHub Actions OIDC and provenance. Configure the npm package to trust the repository workflow; do not add an npm token to repository secrets. Tags are immutable and public history is never rewritten.
+The `release.yml` workflow uses npm trusted publishing with GitHub Actions OIDC and provenance. It pins Node 22.14 and npm 11.5.1, the minimum versions accepted by npm trusted publishing. Configure the npm package to trust this repository and workflow filename; do not add an npm token to repository secrets. Tags are immutable and public history is never rewritten.
