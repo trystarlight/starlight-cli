@@ -20,6 +20,7 @@ import type {
   AgentToolActionEventProjection,
   AgentWorkingSetProjection,
   CreativeDriverBehaviorContract,
+  JsonRecord,
 } from "./protocol.js";
 import { assertSupportedDynamicToolSchema } from "./dynamic-tool-validation.js";
 import {
@@ -1429,6 +1430,28 @@ export class AgentDriverApiClient {
         body: input,
       }),
     );
+  }
+
+  async searchMediaModels(input: {
+    readonly leaseId: string;
+    readonly fencingToken: number;
+    readonly query: string;
+  }): Promise<JsonRecord> {
+    return await this.request("/agent/v1/turns/tools/media/search", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  async getMediaModelSchema(input: {
+    readonly leaseId: string;
+    readonly fencingToken: number;
+    readonly endpointId: string;
+  }): Promise<JsonRecord> {
+    return await this.request("/agent/v1/turns/tools/media/schema", {
+      method: "POST",
+      body: input,
+    });
   }
 
   async downloadMediaExecutionReference(input: {

@@ -240,7 +240,7 @@ describe("server-supplied dynamic tool validation", () => {
     });
   });
 
-  it("rejects oversized arguments and unsupported schema keywords", () => {
+  it("rejects oversized arguments and accepts standard schema references", () => {
     expect(
       validateDynamicToolArguments(voiceTool, {
         auditionCount: 3,
@@ -253,8 +253,11 @@ describe("server-supplied dynamic tool validation", () => {
       failure: { field: "arguments" },
     });
     expect(() =>
-      assertSupportedDynamicToolSchema({ type: "object", $ref: "#/$defs/a" }),
-    ).toThrow(/unsupported/u);
+      assertSupportedDynamicToolSchema({
+        $defs: { a: { type: "object" } },
+        $ref: "#/$defs/a",
+      }),
+    ).not.toThrow();
   });
 });
 

@@ -8,6 +8,10 @@ export const AGENT_SESSION_MEDIA_TOOL_NAME =
   "starlight_resolve_session_media" as const;
 export const AGENT_MEDIA_EXECUTION_TOOL_NAME =
   "starlight_propose_media_execution" as const;
+export const AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME =
+  "starlight_search_media_models" as const;
+export const AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME =
+  "starlight_get_media_model_schema" as const;
 
 export const AGENT_MEDIA_EXECUTION_PROPOSAL_TOOL_NAMES = [
   "starlight_propose_voice_design",
@@ -35,6 +39,8 @@ export type AgentDriverToolName =
   | AgentCharacterToolName
   | typeof AGENT_SESSION_MEDIA_TOOL_NAME
   | typeof AGENT_MEDIA_EXECUTION_TOOL_NAME
+  | typeof AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME
+  | typeof AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME
   | AgentMediaExecutionProposalToolName
   | AgentMediaToolName;
 
@@ -383,6 +389,8 @@ export function isAgentDriverToolName(
     isAgentCharacterToolName(value) ||
     value === AGENT_SESSION_MEDIA_TOOL_NAME ||
     value === AGENT_MEDIA_EXECUTION_TOOL_NAME ||
+    value === AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME ||
+    value === AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME ||
     isAgentMediaExecutionProposalToolName(value) ||
     isAgentMediaToolName(value)
   );

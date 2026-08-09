@@ -194,6 +194,6 @@ describe("driver protocol negotiation", () => {
           },
         }),
       ),
-    ).toThrow(/schema.*unsupported/u);
+    ).not.toThrow();
   });
 });
