@@ -85,7 +85,7 @@ export async function admitCreativeMedia(input: {
       status: "admitted" as const,
       probe,
       byteCount: input.bytes.byteLength,
-      contentHash: createHash("sha256").update(input.bytes).digest("hex"),
+      contentHash: `sha256:${createHash("sha256").update(input.bytes).digest("hex")}`,
       evidence: { violations: [] as const },
     };
   } catch (error) {
@@ -93,7 +93,7 @@ export async function admitCreativeMedia(input: {
       status: "rejected" as const,
       probe: null,
       byteCount: input.bytes.byteLength,
-      contentHash: createHash("sha256").update(input.bytes).digest("hex"),
+      contentHash: `sha256:${createHash("sha256").update(input.bytes).digest("hex")}`,
       evidence: {
         violations: [
           {

@@ -32,7 +32,7 @@ describe("public image admission", () => {
       byteCount: bytes.byteLength,
       probe: { streams: [{ type: "video", width: 7, height: 5 }] },
     });
-    expect(result.contentHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(result.contentHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
   });
 
   it("rejects corrupt or falsely declared bytes", async () => {

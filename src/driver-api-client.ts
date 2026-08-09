@@ -6,6 +6,7 @@ import type {
   AgentCharacterToolName,
   AgentDriverAcceptedIntervention,
   AgentDriverCapability,
+  AgentDriverToolDefinition,
   AgentDriverToolName,
   AgentExecutionProfile,
   AgentExecutionRoutingProjection,
@@ -20,6 +21,7 @@ import type {
   AgentWorkingSetProjection,
   CreativeDriverBehaviorContract,
 } from "./protocol.js";
+import { assertSupportedDynamicToolSchema } from "./dynamic-tool-validation.js";
 import {
   AGENT_DRIVER_INSTRUCTIONS_SCHEMA_VERSION,
   isAgentDriverToolName,
@@ -81,13 +83,7 @@ interface AgentDriverSessionContext {
   readonly driverInstructions?: {
     readonly schemaVersion: typeof AGENT_DRIVER_INSTRUCTIONS_SCHEMA_VERSION;
     readonly text: string;
-    readonly tools: readonly {
-      readonly schemaVersion: string;
-      readonly name: AgentDriverToolName;
-      readonly capability: "text" | "image";
-      readonly description: string;
-      readonly inputSchema: Readonly<Record<string, unknown>>;
-    }[];
+    readonly tools: readonly AgentDriverToolDefinition[];
   };
   readonly workingSet: AgentWorkingSetProjection;
   readonly session: {
@@ -190,7 +186,9 @@ function mediaAction(value: unknown): AgentToolActionEventProjection {
   };
 }
 
-function mediaExecutionResult(value: unknown): AgentMediaExecutionResult {
+export function parseAgentMediaExecutionResult(
+  value: unknown,
+): AgentMediaExecutionResult {
   const source = record(value, "Agent media execution result");
   if (source["schemaVersion"] !== "starlight.media-execution-result.v1") {
     throw new Error("Agent media execution result schema is invalid");
@@ -211,29 +209,54 @@ function mediaExecutionResult(value: unknown): AgentMediaExecutionResult {
     const values = source["operations"];
     if (!Array.isArray(values))
       throw new Error("Agent media execution operations are invalid");
+    const requestedOutputCount = integer(
+      source["requestedOutputCount"],
+      "Agent media execution requested output count",
+    );
+    const expectedOperationCount = integer(
+      source["expectedOperationCount"],
+      "Agent media execution expected operation count",
+    );
+    if (
+      requestedOutputCount < 1 ||
+      expectedOperationCount < 1 ||
+      values.length !== expectedOperationCount
+    ) {
+      throw new Error("Agent media execution operation count is invalid");
+    }
+    const operationIds = new Set<string>();
+    const actionIds = new Set<string>();
     return {
       ...common,
       disposition: "accepted",
-      requestedOutputCount: integer(
-        source["requestedOutputCount"],
-        "Agent media execution requested output count",
-      ),
-      expectedOperationCount: integer(
-        source["expectedOperationCount"],
-        "Agent media execution expected operation count",
-      ),
-      operations: values.map((value) => {
+      requestedOutputCount,
+      expectedOperationCount,
+      operations: values.map((value, index) => {
         const operation = record(value, "Agent media execution operation");
+        const operationId = text(
+          operation["operationId"],
+          "Agent media operation ID",
+        );
+        const actionId = text(operation["actionId"], "Agent media action ID");
+        const ordinal = integer(
+          operation["ordinal"],
+          "Agent media operation ordinal",
+        );
+        if (
+          ordinal !== index + 1 ||
+          operationIds.has(operationId) ||
+          actionIds.has(actionId)
+        ) {
+          throw new Error(
+            "Agent media execution operation identity is invalid",
+          );
+        }
+        operationIds.add(operationId);
+        actionIds.add(actionId);
         return {
-          operationId: text(
-            operation["operationId"],
-            "Agent media operation ID",
-          ),
-          actionId: text(operation["actionId"], "Agent media action ID"),
-          ordinal: integer(
-            operation["ordinal"],
-            "Agent media operation ordinal",
-          ),
+          operationId,
+          actionId,
+          ordinal,
           status: text(operation["status"], "Agent media operation status"),
         };
       }),
@@ -728,13 +751,24 @@ export function parseAgentDriverSessionContext(
               tools: tools.map((value) => {
                 const tool = record(value, "Agent driver tool definition");
                 const capability = tool["capability"];
-                if (capability !== "text" && capability !== "image") {
+                if (
+                  capability !== "text" &&
+                  capability !== "image" &&
+                  capability !== "media-video" &&
+                  capability !== "media-voice-design" &&
+                  capability !== "media-speech"
+                ) {
                   throw new Error("Agent driver tool capability is invalid");
                 }
                 const name = tool["name"];
                 if (!isAgentDriverToolName(name)) {
                   throw new Error("Agent driver tool name is unsupported");
                 }
+                const inputSchema = record(
+                  tool["inputSchema"],
+                  "Agent driver tool input schema",
+                );
+                assertSupportedDynamicToolSchema(inputSchema);
                 return {
                   schemaVersion: text(
                     tool["schemaVersion"],
@@ -746,10 +780,7 @@ export function parseAgentDriverSessionContext(
                     tool["description"],
                     "Agent driver tool description",
                   ),
-                  inputSchema: record(
-                    tool["inputSchema"],
-                    "Agent driver tool input schema",
-                  ),
+                  inputSchema,
                 };
               }),
             },
@@ -1392,7 +1423,7 @@ export class AgentDriverApiClient {
     readonly sourceRuntimeVersion: string;
     readonly driverRuntimeVersion: string;
   }) {
-    return mediaExecutionResult(
+    return parseAgentMediaExecutionResult(
       await this.request("/agent/v1/turns/tools/media/propose", {
         method: "POST",
         body: input,
