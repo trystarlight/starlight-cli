@@ -8,6 +8,10 @@ export const AGENT_SESSION_MEDIA_TOOL_NAME =
   "starlight_resolve_session_media" as const;
 export const AGENT_MEDIA_EXECUTION_TOOL_NAME =
   "starlight_propose_media_execution" as const;
+export const AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME =
+  "starlight_search_media_models" as const;
+export const AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME =
+  "starlight_get_media_model_schema" as const;
 
 export const AGENT_MEDIA_EXECUTION_PROPOSAL_TOOL_NAMES = [
   "starlight_propose_voice_design",
@@ -27,21 +31,24 @@ export type AgentCharacterToolName =
 export type AgentMediaExecutionProposalToolName =
   (typeof AGENT_MEDIA_EXECUTION_PROPOSAL_TOOL_NAMES)[number];
 export type AgentMediaToolName =
-  | "starlight_create_image"
   | "starlight_create_video"
-  | "starlight_design_voice"
-  | "starlight_create_speech";
+  | "starlight_design_character_voice"
+  | "starlight_create_adopted_speech"
+  | "starlight_create_talking_avatar";
 export type AgentDriverToolName =
   | AgentCharacterToolName
   | typeof AGENT_SESSION_MEDIA_TOOL_NAME
   | typeof AGENT_MEDIA_EXECUTION_TOOL_NAME
+  | typeof AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME
+  | typeof AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME
   | AgentMediaExecutionProposalToolName
   | AgentMediaToolName;
 
 export interface AgentDriverToolDefinition {
   readonly schemaVersion: string;
   readonly name: AgentDriverToolName;
-  readonly capability: "text" | "image";
+  readonly capability:
+    "text" | "image" | "media-video" | "media-voice-design" | "media-speech";
   readonly description: string;
   readonly inputSchema: JsonRecord;
 }
@@ -162,6 +169,8 @@ export interface AgentDriverAcceptedIntervention {
 
 export interface AgentWorkingSetProjection {
   readonly schemaVersion: string;
+  readonly videoCatalogue?: JsonRecord;
+  readonly sessionMedia?: JsonRecord;
   readonly subject: {
     readonly kind: "unsaved" | "character-bound";
     readonly binding: null | {
@@ -294,7 +303,28 @@ export function requireAgentWorkingSetProjection(
   const budget = record(source["budget"], "Agent working-set budget");
   const fencing = record(source["fencing"], "Agent working-set fencing");
   const operations = source["operations"];
+  const videoCatalogue = source["videoCatalogue"];
+  const sessionMedia = source["sessionMedia"];
+  if (videoCatalogue !== undefined) {
+    const catalogue = record(videoCatalogue, "Agent video catalogue");
+    if (
+      catalogue["schemaVersion"] !== "starlight.agent-video-catalogue.v1" ||
+      !Array.isArray(catalogue["routes"])
+    ) {
+      throw new Error("Agent video catalogue is invalid");
+    }
+  }
+  if (sessionMedia !== undefined) {
+    const media = record(sessionMedia, "Agent session-media index");
+    if (
+      media["schemaVersion"] !== "starlight.agent-session-media.v1" ||
+      !Array.isArray(media["entries"])
+    ) {
+      throw new Error("Agent session-media index is invalid");
+    }
+  }
   if (
+    source["schemaVersion"] !== "starlight.agent-working-set.v1" ||
     (subject["kind"] !== "unsaved" && subject["kind"] !== "character-bound") ||
     (budget["availability"] !== "available" &&
       budget["availability"] !== "unavailable") ||
@@ -340,10 +370,10 @@ export function isAgentMediaExecutionProposalToolName(
 }
 
 const mediaToolNames: readonly AgentMediaToolName[] = [
-  "starlight_create_image",
   "starlight_create_video",
-  "starlight_design_voice",
-  "starlight_create_speech",
+  "starlight_design_character_voice",
+  "starlight_create_adopted_speech",
+  "starlight_create_talking_avatar",
 ];
 
 export function isAgentMediaToolName(
@@ -359,6 +389,8 @@ export function isAgentDriverToolName(
     isAgentCharacterToolName(value) ||
     value === AGENT_SESSION_MEDIA_TOOL_NAME ||
     value === AGENT_MEDIA_EXECUTION_TOOL_NAME ||
+    value === AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME ||
+    value === AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME ||
     isAgentMediaExecutionProposalToolName(value) ||
     isAgentMediaToolName(value)
   );
@@ -381,31 +413,20 @@ export function normalizeAgentMediaExecutionProposalArguments(
   return Object.freeze({ ...value, kind: proposalKindByToolName[toolName] });
 }
 
-export function validateAgentDriverToolArguments(
-  toolName: AgentDriverToolName,
-  value: unknown,
-):
-  | { readonly valid: true; readonly value: JsonRecord }
-  | {
-      readonly valid: false;
-      readonly failure: { readonly field: string; readonly message: string };
-    } {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return {
-      valid: false,
-      failure: {
-        field: "arguments",
-        message: `${toolName} arguments must be an object`,
-      },
-    };
-  }
-  return { valid: true, value: value as JsonRecord };
-}
-
 export function agentMediaToolOperationKind(input: {
   readonly toolName: AgentMediaToolName;
   readonly arguments: JsonRecord;
 }): string | null {
-  void input;
+  if (input.toolName === "starlight_design_character_voice")
+    return "voice-design";
+  if (input.toolName === "starlight_create_adopted_speech")
+    return "voice-adopted-speech";
+  if (input.toolName === "starlight_create_talking_avatar")
+    return "video-talking-avatar";
+  const mode = input.arguments["mode"];
+  if (mode === "text-to-video") return "video-text-to-video";
+  if (mode === "image-to-video") return "video-image-to-video";
+  if (mode === "reference-to-video" || mode === "draft-enhance")
+    return "video-reference-to-video";
   return null;
 }

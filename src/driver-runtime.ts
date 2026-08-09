@@ -2,19 +2,21 @@ import { createHash } from "node:crypto";
 
 import {
   AGENT_MEDIA_EXECUTION_TOOL_NAME,
+  AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME,
+  AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME,
   AGENT_SESSION_MEDIA_TOOL_NAME,
   agentMediaToolOperationKind,
   isAgentCharacterToolName,
   isAgentMediaExecutionProposalToolName,
   isAgentMediaToolName,
   normalizeAgentMediaExecutionProposalArguments,
-  validateAgentDriverToolArguments,
   type AgentDriverCapability,
   type AgentDriverToolName,
   type AgentExecutionProfile,
   type AgentMediaExecutionResult,
   type AgentToolActionEventProjection,
 } from "./protocol.js";
+import { validateDynamicToolArguments } from "./dynamic-tool-validation.js";
 import {
   admitCreativeMedia,
   createAgentImageMediaContract,
@@ -139,7 +141,7 @@ function falselyClaimsRejectedWorkStarted(text: string) {
     );
 }
 
-function verifiedRejectedToolResponse(text: string, rejection: string) {
+export function verifiedRejectedToolResponse(text: string, rejection: string) {
   const explanation = text.trim();
   if (
     explanation.length === 0 ||
@@ -149,6 +151,30 @@ function verifiedRejectedToolResponse(text: string, rejection: string) {
   }
   if (explanation.includes(ZERO_DISPATCH_TRUTH)) return explanation;
   return `${explanation}\n\n${ZERO_DISPATCH_TRUTH}`;
+}
+
+export function classifyMediaExecutionResult(
+  result: AgentMediaExecutionResult,
+) {
+  if (result.disposition === "accepted") {
+    return {
+      toolSucceeded: true as const,
+      durableWorkCreated: true as const,
+      rejection: null,
+    };
+  }
+  if (result.disposition === "driver-execution-required") {
+    return {
+      toolSucceeded: true as const,
+      durableWorkCreated: true as const,
+      rejection: null,
+    };
+  }
+  return {
+    toolSucceeded: result.disposition === "clarification-required",
+    durableWorkCreated: false as const,
+    rejection: result.message,
+  };
 }
 
 export interface AgentDriverRuntimeDependencies {
@@ -189,6 +215,13 @@ interface ActiveTurn {
   imageAttemptCount: number;
   imageArchivedCount: number;
   readonly definitiveToolRejections: string[];
+  readonly liveMediaSchemas: Map<
+    string,
+    {
+      readonly fingerprint: string;
+      readonly inputSchema: Readonly<Record<string, unknown>>;
+    }
+  >;
   hasSuccessfulToolCall: boolean;
   imageExecution: {
     readonly proposalId: string;
@@ -555,6 +588,7 @@ export class AgentDriverRuntime {
       imageAttemptCount: 0,
       imageArchivedCount: 0,
       definitiveToolRejections: [],
+      liveMediaSchemas: new Map(),
       hasSuccessfulToolCall: false,
       imageExecution: null,
       resultBlocks: [],
@@ -863,8 +897,16 @@ export class AgentDriverRuntime {
                 "The Codex runtime version disappeared before the tool callback",
               );
             }
-            const validation = validateAgentDriverToolArguments(
-              input.toolName,
+            const definition = driverInstructions.tools.find(
+              (candidate) => candidate.name === input.toolName,
+            );
+            if (definition === undefined) {
+              throw new Error(
+                "The selected Starlight tool is missing from the authenticated instruction contract",
+              );
+            }
+            const validation = validateDynamicToolArguments(
+              definition,
               input.arguments,
             );
             if (!validation.valid) {
@@ -888,6 +930,39 @@ export class AgentDriverRuntime {
                   message: validation.failure.message,
                 }),
               };
+            }
+            if (input.toolName === AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME) {
+              const result = await this.api.searchMediaModels({
+                leaseId: claim.lease.leaseId,
+                fencingToken: claim.lease.fencingToken,
+                query: String(input.arguments["query"] ?? ""),
+              });
+              return { success: true, text: JSON.stringify(result) };
+            }
+            if (input.toolName === AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME) {
+              const endpointId = String(input.arguments["endpointId"] ?? "");
+              const result = await this.api.getMediaModelSchema({
+                leaseId: claim.lease.leaseId,
+                fencingToken: claim.lease.fencingToken,
+                endpointId,
+              });
+              const fingerprint = result["schemaFingerprint"];
+              const inputSchema = result["inputSchema"];
+              if (
+                typeof fingerprint !== "string" ||
+                typeof inputSchema !== "object" ||
+                inputSchema === null ||
+                Array.isArray(inputSchema)
+              ) {
+                throw new Error(
+                  "Starlight returned malformed live media schema evidence",
+                );
+              }
+              active.liveMediaSchemas.set(endpointId, {
+                fingerprint,
+                inputSchema: inputSchema as Readonly<Record<string, unknown>>,
+              });
+              return { success: true, text: JSON.stringify(result) };
             }
             if (input.toolName === AGENT_SESSION_MEDIA_TOOL_NAME) {
               const result = await this.api.resolveSessionMedia({
@@ -967,6 +1042,71 @@ export class AgentDriverRuntime {
                     input.arguments,
                   )
                 : input.arguments;
+              if (
+                executionArguments["kind"] === "video" ||
+                executionArguments["kind"] === "talking-avatar"
+              ) {
+                const variants = executionArguments["variants"];
+                if (!Array.isArray(variants)) {
+                  throw new Error("Media variants are missing");
+                }
+                for (const [index, value] of variants.entries()) {
+                  if (
+                    typeof value !== "object" ||
+                    value === null ||
+                    Array.isArray(value)
+                  ) {
+                    throw new Error(
+                      `Media variant ${String(index + 1)} is invalid`,
+                    );
+                  }
+                  const variant = value as Readonly<Record<string, unknown>>;
+                  const endpointId = variant["endpointId"];
+                  const schemaFingerprint = variant["schemaFingerprint"];
+                  const discovered =
+                    typeof endpointId === "string"
+                      ? active.liveMediaSchemas.get(endpointId)
+                      : undefined;
+                  if (
+                    discovered === undefined ||
+                    discovered.fingerprint !== schemaFingerprint
+                  ) {
+                    return {
+                      success: false,
+                      text: toolInputFeedback({
+                        schemaVersion: "starlight.agent-tool-rejection.v1",
+                        code: "invalid-tool-arguments",
+                        toolName: input.toolName,
+                        field: `arguments.variants.${String(index)}.schemaFingerprint`,
+                        message:
+                          "Retrieve the exact current endpoint schema in this turn before proposing provider input.",
+                      }),
+                    };
+                  }
+                  const providerValidation = validateDynamicToolArguments(
+                    {
+                      schemaVersion: "starlight.fal-live-schema.v1",
+                      name: input.toolName,
+                      capability: "media-video",
+                      description: "Exact live fal provider input schema.",
+                      inputSchema: discovered.inputSchema,
+                    },
+                    variant["providerInput"],
+                  );
+                  if (!providerValidation.valid) {
+                    return {
+                      success: false,
+                      text: toolInputFeedback({
+                        schemaVersion: "starlight.agent-tool-rejection.v1",
+                        code: "invalid-tool-arguments",
+                        toolName: input.toolName,
+                        field: `arguments.variants.${String(index)}.${providerValidation.failure.field}`,
+                        message: providerValidation.failure.message,
+                      }),
+                    };
+                  }
+                }
+              }
               const result = await this.api.proposeMediaExecution({
                 leaseId: claim.lease.leaseId,
                 fencingToken: claim.lease.fencingToken,
@@ -977,6 +1117,7 @@ export class AgentDriverRuntime {
                 driverRuntimeVersion: STARLIGHT_CLI_VERSION,
               });
               active.nextEventSequence = result.nextEventSequence;
+              const outcome = classifyMediaExecutionResult(result);
               if (result.disposition === "accepted") {
                 for (const operation of result.operations) {
                   if (
@@ -1023,10 +1164,13 @@ export class AgentDriverRuntime {
                     : { parentOperationId }),
                 };
               }
-              if (result.disposition !== "invalid")
+              if (outcome.durableWorkCreated) {
                 active.hasSuccessfulToolCall = true;
+              } else {
+                active.definitiveToolRejections.push(outcome.rejection);
+              }
               return {
-                success: result.disposition !== "invalid",
+                success: outcome.toolSucceeded,
                 text: JSON.stringify(result),
               };
             }
