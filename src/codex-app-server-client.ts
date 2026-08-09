@@ -34,6 +34,10 @@ import {
   type CodexRuntimeInstallation,
 } from "./codex-runtime-discovery.js";
 import {
+  configuredCodexHome,
+  hasOnlyCodexHomeInstructionSource,
+} from "./codex-instruction-sources.js";
+import {
   FileCodexThreadStore,
   type CodexThreadStore,
 } from "./codex-thread-store.js";
@@ -291,17 +295,6 @@ function childEnvironment(environment: NodeJS.ProcessEnv) {
     if (value !== undefined) result[key] = value;
   }
   return result;
-}
-
-function configuredCodexHome(environment: NodeJS.ProcessEnv) {
-  const configured = environment["CODEX_HOME"];
-  const value =
-    configured === undefined
-      ? environment["HOME"] === undefined
-        ? null
-        : join(environment["HOME"], ".codex")
-      : configured;
-  return value !== null && isAbsolute(value) ? resolve(value) : null;
 }
 
 function isNestedPath(root: string, candidate: string) {
@@ -1142,8 +1135,9 @@ export class CodexAppServerClient {
       );
       this.throwIfSecurityViolation();
       if (
-        !this.hasOnlyCodexHomeInstructionSource(
+        !hasOnlyCodexHomeInstructionSource(
           threadResult["instructionSources"],
+          this.environment,
         )
       ) {
         const violation = new CodexAppServerError(
@@ -1366,8 +1360,9 @@ export class CodexAppServerClient {
       );
       this.throwIfSecurityViolation();
       if (
-        !this.hasOnlyCodexHomeInstructionSource(
+        !hasOnlyCodexHomeInstructionSource(
           threadResult["instructionSources"],
+          this.environment,
         )
       ) {
         const violation = new CodexAppServerError(
@@ -1436,8 +1431,9 @@ export class CodexAppServerClient {
       );
       this.throwIfSecurityViolation();
       if (
-        !this.hasOnlyCodexHomeInstructionSource(
+        !hasOnlyCodexHomeInstructionSource(
           threadResult["instructionSources"],
+          this.environment,
         )
       ) {
         const violation = new CodexAppServerError(
@@ -1851,11 +1847,6 @@ export class CodexAppServerClient {
 
   private throwIfSecurityViolation() {
     if (this.securityViolation !== null) throw this.securityViolation;
-  }
-
-  private hasOnlyCodexHomeInstructionSource(value: unknown) {
-    if (value === undefined) return true;
-    return Array.isArray(value) && value.length === 0;
   }
 
   private processFailure(detail: string, cause?: unknown) {
