@@ -1,0 +1,60 @@
+{
+  "name": "@trystarlight/cli",
+  "version": "0.1.0",
+  "description": "Connect a macOS user-owned Codex installation to Starlight.",
+  "type": "module",
+  "bin": {
+    "starlight": "./dist/main.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "PROTOCOL.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "os": [
+    "darwin"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trystarlight/starlight-cli.git"
+  },
+  "homepage": "https://app.trystarlight.io/agent",
+  "bugs": {
+    "url": "https://github.com/trystarlight/starlight-cli/issues"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "clean": "rm -rf dist coverage",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "pack:check": "node scripts/check-package.mjs",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm pack:check"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "sharp": "0.35.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.1",
+    "eslint": "^10.6.0",
+    "prettier": "^3.9.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
+  },
+  "packageManager": "pnpm@10.18.2",
+  "license": "UNLICENSED"
+}
