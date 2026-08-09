@@ -77,7 +77,8 @@ export function createProgram(overrides: Partial<ProgramDependencies> = {}) {
     .name("starlight")
     .description("Connect a user-owned Codex installation to Starlight.")
     .version(STARLIGHT_CLI_VERSION)
-    .showHelpAfterError();
+    .showHelpAfterError()
+    .exitOverride();
 
   const writeEnvelope = (
     value: DriverCommandEnvelope,
