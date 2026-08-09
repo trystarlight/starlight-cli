@@ -103,6 +103,34 @@ export interface CodexTurnCallbacks {
   }) => Promise<void>;
 }
 
+export const CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES = 32_000;
+
+export function codexDynamicToolResult(input: {
+  readonly toolName: AgentDriverToolName;
+  readonly success: boolean;
+  readonly text: string;
+}) {
+  if (
+    new TextEncoder().encode(input.text).byteLength <=
+    CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES
+  ) {
+    return { success: input.success, text: input.text };
+  }
+  return {
+    success: false,
+    text: JSON.stringify({
+      schemaVersion: "starlight.driver-tool-result-error.v1",
+      code: "tool-result-too-large",
+      toolName: input.toolName,
+      message:
+        "The authoritative Starlight tool result exceeds this driver version's safe callback limit. No result was truncated; update the CLI before continuing.",
+      maximumBytes: CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES,
+      operationCreated: false,
+      providerDispatchStarted: false,
+    }),
+  };
+}
+
 export type CodexImageInput = CodexTextInput;
 
 export type CodexSteerResult =
@@ -2044,12 +2072,15 @@ export class CodexAppServerClient {
     }
     void task.then(
       (result) => {
+        const callbackResult = codexDynamicToolResult({
+          toolName: tool as AgentDriverToolName,
+          success: result.success,
+          text: result.text,
+        });
         this.serverResponse(id, {
           result: {
-            success: result.success,
-            contentItems: [
-              { type: "inputText", text: result.text.slice(0, 4_000) },
-            ],
+            success: callbackResult.success,
+            contentItems: [{ type: "inputText", text: callbackResult.text }],
           },
         });
       },
