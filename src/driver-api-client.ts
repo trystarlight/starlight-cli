@@ -12,7 +12,9 @@ import type {
   AgentExecutionRoutingProjection,
   AgentInputCapability,
   AgentMediaExecutionResult,
+  AgentMediaSchemaDocument,
   AgentMediaSchemaBinding,
+  AgentMediaSchemaNavigationResult,
   AgentMediaToolFailure,
   AgentMediaToolName,
   AgentSessionMediaResolution,
@@ -31,7 +33,12 @@ import {
   AGENT_MEDIA_TOOL_FAILURE_PHASES,
   AGENT_MEDIA_TOOL_FAILURE_SCHEMA_VERSION,
   AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION,
+  AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_INLINE_VALUE_BYTES,
+  AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_PAGE_ENTRIES,
+  AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_RESULT_BYTES,
+  AGENT_MEDIA_SCHEMA_NAVIGATION_SCHEMA_VERSION,
   isAgentDriverToolName,
+  isAgentMediaExecutionProposalToolName,
   requireAgentWorkingSetProjection,
   requireAgentSessionMediaResolution,
   requireCreativeDriverBehaviorProfile,
@@ -45,6 +52,9 @@ import {
 import { STARLIGHT_DRIVER_PROTOCOL_VERSION } from "./version.js";
 
 type Fetch = typeof fetch;
+
+export const AGENT_DRIVER_DEFAULT_MAXIMUM_JSON_RESPONSE_BYTES = 4 * 1024 * 1024;
+export const AGENT_DRIVER_MEDIA_DISCOVERY_MAXIMUM_JSON_RESPONSE_BYTES = 64_000;
 
 export interface AgentDriverLease {
   readonly leaseId: string;
@@ -273,6 +283,16 @@ export function parseAgentDriverToolDefinition(
     rawBoundArguments === undefined
       ? undefined
       : record(rawBoundArguments, "Agent driver tool bound arguments");
+  if (
+    boundArguments !== undefined &&
+    (!isAgentMediaExecutionProposalToolName(name) ||
+      Object.keys(boundArguments).length !== 1 ||
+      typeof boundArguments["kind"] !== "string")
+  ) {
+    throw new Error(
+      "Only a legacy specialized proposal may carry its server-supplied kind binding",
+    );
+  }
   return {
     schemaVersion: text(
       tool["schemaVersion"],
@@ -333,30 +353,26 @@ export function parseAgentMediaSchemaBinding(
   ) {
     throw new Error("Agent media schema binding endpoints are not unique");
   }
-  const toolDefinition = parseAgentDriverToolDefinition(
-    source["toolDefinition"],
+  const proposalContract = record(
+    source["proposalContract"],
+    "Agent media schema binding proposal contract",
   );
-  const expectedName =
-    kind === "video"
-      ? "starlight_propose_video"
-      : "starlight_propose_talking_avatar";
   if (
-    toolDefinition.name !== expectedName ||
-    toolDefinition.boundArguments?.["kind"] !== kind ||
-    toolDefinition.boundArguments["schemaBindingId"] !== bindingId
+    proposalContract["schemaVersion"] !==
+      "starlight.media-execution-intent.v2" ||
+    proposalContract["toolName"] !== "starlight_propose_media_execution"
   ) {
-    throw new Error("Agent media schema binding tool identity is invalid");
+    throw new Error("Agent media schema binding proposal contract is invalid");
   }
   return {
     schemaVersion: AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION,
     bindingId,
     kind,
     endpoints,
-    toolDefinition,
-    continuationInstructions: text(
-      source["continuationInstructions"],
-      "Media schema binding continuation instructions",
-    ),
+    proposalContract: {
+      schemaVersion: "starlight.media-execution-intent.v2",
+      toolName: "starlight_propose_media_execution",
+    },
     expiresAt: integer(source["expiresAt"], "Media schema binding expiry"),
     nextEventSequence: integer(
       source["nextEventSequence"],
@@ -365,6 +381,244 @@ export function parseAgentMediaSchemaBinding(
     operationCreated: false,
     providerDispatchStarted: false,
   };
+}
+
+function mediaSchemaDocument(
+  value: unknown,
+  label: string,
+): AgentMediaSchemaDocument {
+  if (value !== "input" && value !== "output" && value !== "openapi") {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
+}
+
+function mediaSchemaNodeType(value: unknown, label: string) {
+  if (
+    value !== "object" &&
+    value !== "array" &&
+    value !== "string" &&
+    value !== "number" &&
+    value !== "boolean" &&
+    value !== "null"
+  ) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
+}
+
+function mediaSchemaPointer(value: unknown, label: string) {
+  if (
+    typeof value !== "string" ||
+    value.length > 4_000 ||
+    !/^(?:|\/(?:[^~]|~[01])*)$/u.test(value)
+  ) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
+}
+
+export function parseAgentMediaSchemaNavigationResult(
+  value: unknown,
+): AgentMediaSchemaNavigationResult {
+  const source = record(value, "Agent media schema navigation");
+  const endpointId = text(
+    source["endpointId"],
+    "Agent media schema navigation endpoint",
+  );
+  const schemaFingerprint = text(
+    source["schemaFingerprint"],
+    "Agent media schema navigation fingerprint",
+  );
+  if (
+    source["schemaVersion"] !== AGENT_MEDIA_SCHEMA_NAVIGATION_SCHEMA_VERSION ||
+    !/^[a-z0-9][a-z0-9./_-]{2,199}$/u.test(endpointId) ||
+    !/^sha256:[a-f0-9]{64}$/u.test(schemaFingerprint) ||
+    source["operationCreated"] !== false ||
+    source["providerDispatchStarted"] !== false ||
+    new TextEncoder().encode(JSON.stringify(source)).byteLength >
+      AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_RESULT_BYTES
+  ) {
+    throw new Error("Agent media schema navigation response is invalid");
+  }
+  if (source["disposition"] === "schema-stale") {
+    if (
+      source["code"] !== "provider-schema-stale" ||
+      source["field"] !== "arguments.schemaFingerprint" ||
+      !/^sha256:[a-f0-9]{64}$/u.test(
+        text(
+          source["requestedSchemaFingerprint"],
+          "Requested schema fingerprint",
+        ),
+      ) ||
+      typeof source["message"] !== "string" ||
+      source["schemaRefreshAllowed"] !== true ||
+      source["mustStop"] !== false
+    ) {
+      throw new Error("Agent media stale-schema response is invalid");
+    }
+    return source as unknown as AgentMediaSchemaNavigationResult;
+  }
+  if (source["disposition"] === "invalid-pointer") {
+    const code = source["code"];
+    const field = source["field"];
+    if (
+      (code !== "schema-pointer-invalid" && code !== "schema-cursor-invalid") ||
+      (field !== "arguments.pointer" && field !== "arguments.cursor") ||
+      typeof source["message"] !== "string" ||
+      source["schemaRefreshAllowed"] !== false ||
+      source["mustStop"] !== false
+    ) {
+      throw new Error("Agent media schema-pointer response is invalid");
+    }
+    mediaSchemaDocument(source["document"], "Schema navigation document");
+    if (typeof source["pointer"] !== "string") {
+      throw new Error("Schema navigation rejected pointer is invalid");
+    }
+    return source as unknown as AgentMediaSchemaNavigationResult;
+  }
+  if (source["disposition"] !== "node") {
+    throw new Error("Agent media schema navigation disposition is invalid");
+  }
+  const binding = record(source["binding"], "Schema navigation binding");
+  if (
+    binding["endpointId"] !== endpointId ||
+    binding["schemaFingerprint"] !== schemaFingerprint
+  ) {
+    throw new Error("Agent media schema navigation binding is invalid");
+  }
+  const documents = source["documents"];
+  if (
+    !Array.isArray(documents) ||
+    documents.length < 1 ||
+    documents.length > 3
+  ) {
+    throw new Error("Agent media schema navigation documents are invalid");
+  }
+  for (const [index, value] of documents.entries()) {
+    const document = record(
+      value,
+      `Schema navigation document ${String(index)}`,
+    );
+    mediaSchemaDocument(
+      document["document"],
+      "Schema navigation document kind",
+    );
+    if (document["pointer"] !== "") {
+      throw new Error("Schema navigation document root is invalid");
+    }
+    mediaSchemaNodeType(
+      document["nodeType"],
+      "Schema navigation document node type",
+    );
+    integer(document["byteLength"], "Schema navigation document byte length");
+  }
+  mediaSchemaDocument(
+    source["document"],
+    "Schema navigation selected document",
+  );
+  mediaSchemaPointer(source["pointer"], "Schema navigation pointer");
+  mediaSchemaNodeType(source["nodeType"], "Schema navigation node type");
+  integer(source["byteLength"], "Schema navigation byte length");
+  if (typeof source["valueComplete"] !== "boolean") {
+    throw new Error("Schema navigation completeness is invalid");
+  }
+  const hasValue = Object.prototype.hasOwnProperty.call(source, "value");
+  if (
+    source["valueComplete"] !== hasValue ||
+    (hasValue &&
+      new TextEncoder().encode(JSON.stringify(source["value"])).byteLength >
+        AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_INLINE_VALUE_BYTES)
+  ) {
+    throw new Error("Schema navigation inline value is invalid");
+  }
+  const limits = record(source["limits"], "Schema navigation limits");
+  if (
+    limits["maximumResultBytes"] !==
+      AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_RESULT_BYTES ||
+    limits["maximumInlineValueBytes"] !==
+      AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_INLINE_VALUE_BYTES ||
+    limits["maximumPageEntries"] !==
+      AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_PAGE_ENTRIES
+  ) {
+    throw new Error("Schema navigation limits are incompatible");
+  }
+  if (source["children"] !== undefined) {
+    const children = record(source["children"], "Schema navigation children");
+    const entries = children["entries"];
+    const nextCursor = children["nextCursor"];
+    const cursor = integer(
+      children["cursor"],
+      "Schema navigation child cursor",
+    );
+    const total = integer(children["total"], "Schema navigation child total");
+    if (
+      (nextCursor !== null &&
+        (typeof nextCursor !== "number" ||
+          !Number.isSafeInteger(nextCursor) ||
+          nextCursor < 0)) ||
+      !Array.isArray(entries) ||
+      entries.length > AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_PAGE_ENTRIES
+    ) {
+      throw new Error("Schema navigation child page is invalid");
+    }
+    for (const [index, value] of entries.entries()) {
+      const entry = record(value, `Schema navigation child ${String(index)}`);
+      if (
+        integer(entry["index"], "Schema navigation child index") !==
+        cursor + index
+      ) {
+        throw new Error("Schema navigation child index is not contiguous");
+      }
+      string(entry["token"], "Schema navigation child token");
+      mediaSchemaPointer(entry["pointer"], "Schema navigation child pointer");
+      mediaSchemaNodeType(
+        entry["nodeType"],
+        "Schema navigation child node type",
+      );
+      integer(entry["byteLength"], "Schema navigation child byte length");
+      if (typeof entry["inline"] !== "boolean") {
+        throw new Error("Schema navigation child inline status is invalid");
+      }
+    }
+    const expectedNextCursor = cursor + entries.length;
+    if (
+      expectedNextCursor > total ||
+      (nextCursor === null
+        ? expectedNextCursor !== total
+        : nextCursor !== expectedNextCursor || nextCursor >= total)
+    ) {
+      throw new Error("Schema navigation child cursor progression is invalid");
+    }
+  }
+  if (source["scalarPage"] !== undefined) {
+    const page = record(source["scalarPage"], "Schema navigation scalar page");
+    const nextCursor = page["nextCursor"];
+    const pageText = string(page["text"], "Schema navigation scalar text");
+    if (
+      page["encoding"] !== "unicode-code-points" ||
+      (nextCursor !== null &&
+        (typeof nextCursor !== "number" ||
+          !Number.isSafeInteger(nextCursor) ||
+          nextCursor < 0)) ||
+      Array.from(pageText).length >
+        AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_PAGE_ENTRIES
+    ) {
+      throw new Error("Schema navigation scalar page is invalid");
+    }
+    const cursor = integer(page["cursor"], "Schema navigation scalar cursor");
+    const total = integer(page["total"], "Schema navigation scalar total");
+    const expectedNextCursor = cursor + Array.from(pageText).length;
+    if (
+      expectedNextCursor > total ||
+      (nextCursor === null
+        ? expectedNextCursor !== total
+        : nextCursor !== expectedNextCursor || nextCursor >= total)
+    ) {
+      throw new Error("Schema navigation scalar cursor progression is invalid");
+    }
+  }
+  return source as unknown as AgentMediaSchemaNavigationResult;
 }
 
 function mediaAction(value: unknown): AgentToolActionEventProjection {
@@ -1128,11 +1382,19 @@ export class AgentDriverApiClient {
 
   private async request(
     path: string,
-    init: { readonly method?: "GET" | "POST"; readonly body?: unknown } = {},
+    init: {
+      readonly method?: "GET" | "POST";
+      readonly body?: unknown;
+      readonly outcome?: "read" | "mutation";
+      readonly maximumResponseBytes?: number;
+    } = {},
   ) {
     const { state, credential } = await this.credential();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    const mutation =
+      (init.outcome ?? (init.method === "POST" ? "mutation" : "read")) ===
+      "mutation";
     let response: Response;
     try {
       response = await this.fetcher(`${state.apiUrl}${path}`, {
@@ -1148,24 +1410,51 @@ export class AgentDriverApiClient {
         signal: controller.signal,
       });
     } catch (error) {
-      const mutation = init.method === "POST";
       throw new AgentDriverApiError(
         mutation
           ? "The Starlight driver request did not reach a definitive outcome"
           : "The Starlight driver could not read the current durable state",
-        mutation ? "outcome-ambiguous" : "request-rejected",
+        mutation ? "outcome-ambiguous" : "platform-failure",
         null,
         { cause: error },
       );
     } finally {
       clearTimeout(timeout);
     }
-    const body = (await response.json().catch(() => null)) as unknown;
+    const maximumResponseBytes =
+      init.maximumResponseBytes ??
+      AGENT_DRIVER_DEFAULT_MAXIMUM_JSON_RESPONSE_BYTES;
+    let body: unknown;
+    try {
+      const declaredLength = response.headers.get("content-length");
+      if (
+        declaredLength !== null &&
+        /^\d+$/u.test(declaredLength) &&
+        Number(declaredLength) > maximumResponseBytes
+      ) {
+        throw new Error(
+          "Response content length exceeds the explicit transport limit",
+        );
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > maximumResponseBytes) {
+        throw new Error("Response bytes exceed the explicit transport limit");
+      }
+      const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      body = JSON.parse(json) as unknown;
+    } catch (error) {
+      throw new AgentDriverApiError(
+        "The Starlight driver API returned a malformed or oversized response",
+        response.ok && mutation ? "outcome-ambiguous" : "platform-failure",
+        response.status,
+        { cause: error },
+      );
+    }
     if (response.ok) {
       if (!isRecord(body)) {
         throw new AgentDriverApiError(
           "The Starlight driver API returned an invalid success response",
-          init.method === "POST" ? "outcome-ambiguous" : "request-rejected",
+          mutation ? "outcome-ambiguous" : "platform-failure",
           response.status,
         );
       }
@@ -1251,6 +1540,34 @@ export class AgentDriverApiClient {
       "platform-failure",
       response.status,
     );
+  }
+
+  private async requestParsed<T>(
+    path: string,
+    init: {
+      readonly method?: "GET" | "POST";
+      readonly body?: unknown;
+      readonly outcome?: "read" | "mutation";
+      readonly maximumResponseBytes?: number;
+    },
+    label: string,
+    parser: (value: unknown) => T,
+  ): Promise<T> {
+    const mutation =
+      (init.outcome ?? (init.method === "POST" ? "mutation" : "read")) ===
+      "mutation";
+    const body = await this.request(path, init);
+    try {
+      return parser(body);
+    } catch (error) {
+      if (error instanceof AgentDriverApiError) throw error;
+      throw new AgentDriverApiError(
+        `The Starlight driver API returned an incompatible ${label} success response`,
+        mutation ? "outcome-ambiguous" : "platform-failure",
+        null,
+        { cause: error },
+      );
+    }
   }
 
   async getCredentialContext() {
@@ -1614,11 +1931,14 @@ export class AgentDriverApiClient {
     readonly sourceRuntimeVersion: string;
     readonly driverRuntimeVersion: string;
   }) {
-    return parseAgentMediaExecutionResult(
-      await this.request("/agent/v1/turns/tools/media/propose", {
+    return await this.requestParsed(
+      "/agent/v1/turns/tools/media/propose",
+      {
         method: "POST",
         body: input,
-      }),
+      },
+      "media proposal",
+      parseAgentMediaExecutionResult,
     );
   }
 
@@ -1630,6 +1950,9 @@ export class AgentDriverApiClient {
     return await this.request("/agent/v1/turns/tools/media/search", {
       method: "POST",
       body: input,
+      outcome: "read",
+      maximumResponseBytes:
+        AGENT_DRIVER_MEDIA_DISCOVERY_MAXIMUM_JSON_RESPONSE_BYTES,
     });
   }
 
@@ -1637,11 +1960,23 @@ export class AgentDriverApiClient {
     readonly leaseId: string;
     readonly fencingToken: number;
     readonly endpointId: string;
-  }): Promise<JsonRecord> {
-    return await this.request("/agent/v1/turns/tools/media/schema", {
-      method: "POST",
-      body: input,
-    });
+    readonly schemaFingerprint?: string;
+    readonly document?: AgentMediaSchemaDocument;
+    readonly pointer?: string;
+    readonly cursor?: number;
+  }): Promise<AgentMediaSchemaNavigationResult> {
+    return await this.requestParsed(
+      "/agent/v1/turns/tools/media/schema",
+      {
+        method: "POST",
+        body: input,
+        outcome: "read",
+        maximumResponseBytes:
+          AGENT_DRIVER_MEDIA_DISCOVERY_MAXIMUM_JSON_RESPONSE_BYTES,
+      },
+      "media schema-navigation",
+      parseAgentMediaSchemaNavigationResult,
+    );
   }
 
   async prepareMediaSchemaBinding(input: {
@@ -1653,11 +1988,14 @@ export class AgentDriverApiClient {
     readonly sourceRuntimeVersion: string;
     readonly driverRuntimeVersion: string;
   }): Promise<AgentMediaSchemaBinding> {
-    return parseAgentMediaSchemaBinding(
-      await this.request("/agent/v1/turns/tools/media/bind-schema", {
+    return await this.requestParsed(
+      "/agent/v1/turns/tools/media/bind-schema",
+      {
         method: "POST",
         body: input,
-      }),
+      },
+      "media schema-binding",
+      parseAgentMediaSchemaBinding,
     );
   }
 

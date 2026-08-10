@@ -73,11 +73,21 @@ describe("driver protocol negotiation", () => {
     );
   });
 
-  it("preserves opaque server-owned working state, media index, and current media tools", () => {
+  it("preserves server-owned catalogue, media index, and current media tools", () => {
     const videoCatalogue = {
       schemaVersion: "starlight.agent-video-catalogue.v1",
-      catalogueVersion: "server-owned-fixture",
-      routes: [],
+      catalogueVersion: "starlight.video-routes.v1",
+      routes: [
+        {
+          routeId: "cinematic-image-to-video",
+          familyId: "cinematic",
+          selectorHints: ["Cinematic", "Cinematic Standard"],
+          mode: "image-to-video",
+          inputs: {
+            framing: { kind: "provider-controlled", values: ["auto"] },
+          },
+        },
+      ],
     };
     const sessionMedia = {
       schemaVersion: "starlight.agent-session-media.v1",

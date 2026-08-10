@@ -70,25 +70,41 @@ const schemaTool: AgentDriverToolDefinition = {
   },
 };
 
-describe("media schema binding continuation", () => {
-  it("uses one internal continuation with the exact server tool and no second Starlight turn", async () => {
+describe("same-turn stable media proposal", () => {
+  it("navigates, binds, and proposes through one Codex turn", async () => {
     const controller = new AbortController();
     const fingerprint = `sha256:${"c".repeat(64)}`;
     const bindingId = "binding_00000000-0000-4000-8000-000000000002";
-    const exactProposalTool: AgentDriverToolDefinition = {
-      schemaVersion: "starlight.media-schema-binding.v1",
-      name: "starlight_propose_video",
+    const stableProposalTool: AgentDriverToolDefinition = {
+      schemaVersion: "starlight.media-execution-intent.v2",
+      name: "starlight_propose_media_execution",
       capability: "text",
-      description: "Submit one exact bound proposal.",
+      description: "Submit one stable server-validated media proposal.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
-        required: ["schemaVersion", "outputCount", "variants"],
+        required: [
+          "schemaVersion",
+          "idempotencyKey",
+          "kind",
+          "schemaBindingId",
+          "subject",
+          "references",
+          "derivation",
+          "outputCount",
+          "variants",
+        ],
         properties: {
           schemaVersion: {
             type: "string",
             const: "starlight.media-execution-intent.v2",
           },
+          idempotencyKey: { type: "string", minLength: 1 },
+          kind: { type: "string", const: "video" },
+          schemaBindingId: { type: "string", const: bindingId },
+          subject: { type: "object" },
+          references: { type: "object" },
+          derivation: { type: "object" },
           outputCount: { type: "integer", const: 1 },
           variants: {
             type: "array",
@@ -110,15 +126,7 @@ describe("media schema binding continuation", () => {
                   const: "minimax/h3/image-to-video",
                 },
                 schemaFingerprint: { type: "string", const: fingerprint },
-                providerInput: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["prompt", "image_url"],
-                  properties: {
-                    prompt: { type: "string" },
-                    image_url: { type: "string" },
-                  },
-                },
+                providerInput: { type: "object" },
                 requestedModel: { type: "string" },
                 selectionReason: { type: "string" },
               },
@@ -126,7 +134,6 @@ describe("media schema binding continuation", () => {
           },
         },
       },
-      boundArguments: { kind: "video", schemaBindingId: bindingId },
     };
     const claim: AgentDriverClaim = {
       turn: {
@@ -162,6 +169,7 @@ describe("media schema binding continuation", () => {
     const proposeMediaExecution = vi.fn(
       async (input: { arguments: unknown }) => {
         expect(input.arguments).toMatchObject({
+          idempotencyKey: "proposal:h3:one-output:001",
           kind: "video",
           schemaBindingId: bindingId,
         });
@@ -212,7 +220,7 @@ describe("media schema binding continuation", () => {
         driverInstructions: {
           schemaVersion: "starlight.agent-driver-instructions.v1" as const,
           text: "Use only authenticated Starlight tools.",
-          tools: [schemaTool, bindingTool],
+          tools: [schemaTool, bindingTool, stableProposalTool],
         },
         workingSet,
         session: { sessionId: "session_test", title: "Media session" },
@@ -227,7 +235,7 @@ describe("media schema binding continuation", () => {
         },
       }),
       prepareMediaSchemaBinding: async () => ({
-        schemaVersion: "starlight.media-schema-binding.v1" as const,
+        schemaVersion: "starlight.media-schema-binding.v2" as const,
         bindingId,
         kind: "video" as const,
         endpoints: [
@@ -236,32 +244,44 @@ describe("media schema binding continuation", () => {
             schemaFingerprint: fingerprint,
           },
         ],
-        toolDefinition: exactProposalTool,
-        continuationInstructions: "Use the exact bound proposal once.",
+        proposalContract: {
+          schemaVersion: "starlight.media-execution-intent.v2" as const,
+          toolName: "starlight_propose_media_execution" as const,
+        },
         expiresAt: 50_000,
         nextEventSequence: 3,
         operationCreated: false as const,
         providerDispatchStarted: false as const,
       }),
       getMediaModelSchema: async () => ({
-        schemaVersion: "starlight.fal-live-schema.v1",
+        schemaVersion: "starlight.agent-media-schema-navigation.v1" as const,
         endpointId: "minimax/h3/image-to-video",
         schemaFingerprint: fingerprint,
-        inputSchema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["prompt", "image_url"],
-          properties: {
-            prompt: { type: "string" },
-            image_url: { type: "string" },
-          },
+        operationCreated: false as const,
+        providerDispatchStarted: false as const,
+        disposition: "node" as const,
+        binding: {
+          endpointId: "minimax/h3/image-to-video",
+          schemaFingerprint: fingerprint,
         },
-        openApi: {
-          paths: {
-            "/fal-ai/minimax-h3/image-to-video": {
-              post: { requestBody: { $ref: "#/components/H3Request" } },
-            },
+        documents: [
+          {
+            document: "input" as const,
+            pointer: "" as const,
+            nodeType: "object" as const,
+            byteLength: 12_000,
           },
+        ],
+        document: "input" as const,
+        pointer: "/properties/image_url",
+        nodeType: "object" as const,
+        byteLength: 56,
+        valueComplete: true,
+        value: { type: "string", format: "uri" },
+        limits: {
+          maximumResultBytes: 24_000,
+          maximumInlineValueBytes: 8_000,
+          maximumPageEntries: 32,
         },
       }),
       proposeMediaExecution,
@@ -300,40 +320,47 @@ describe("media schema binding continuation", () => {
         generateInputs.push(input);
         const callback = input.callbacks?.onDynamicToolCall;
         if (callback === undefined) throw new Error("Tool callback is missing");
-        if (generateInputs.length === 1) {
-          const schema = await callback({
-            toolName: "starlight_get_media_model_schema",
-            callId: "call_schema",
-            arguments: { endpointId: "minimax/h3/image-to-video" },
-            threadId: "thread_test",
-            turnId: "codex_turn_a",
-          });
-          expect(schema).toMatchObject({ success: true });
-          expect(schema.text).toContain('"$ref"');
-          const prepared = await callback({
-            toolName: "starlight_prepare_media_schema_binding",
-            callId: "call_bind",
-            arguments: {
-              schemaVersion: "starlight.media-schema-binding-request.v1",
-              kind: "video",
-              endpoints: [
-                {
-                  endpointId: "minimax/h3/image-to-video",
-                  schemaFingerprint: fingerprint,
-                },
-              ],
-            },
-            threadId: "thread_test",
-            turnId: "codex_turn_a",
-          });
-          expect(prepared).toMatchObject({ success: true });
-          return "Prepared exact schema binding.";
-        }
+        const schema = await callback({
+          toolName: "starlight_get_media_model_schema",
+          callId: "call_schema",
+          arguments: { endpointId: "minimax/h3/image-to-video" },
+          threadId: "thread_test",
+          turnId: "codex_turn_a",
+        });
+        expect(schema).toMatchObject({ success: true });
+        expect(schema.text).toContain('"pointer":"/properties/image_url"');
+        expect(schema.text).not.toContain('"inputSchema"');
+        const prepared = await callback({
+          toolName: "starlight_prepare_media_schema_binding",
+          callId: "call_bind",
+          arguments: {
+            schemaVersion: "starlight.media-schema-binding-request.v1",
+            kind: "video",
+            endpoints: [
+              {
+                endpointId: "minimax/h3/image-to-video",
+                schemaFingerprint: fingerprint,
+              },
+            ],
+          },
+          threadId: "thread_test",
+          turnId: "codex_turn_a",
+        });
+        expect(prepared).toMatchObject({ success: true });
+        expect(prepared.text).toContain(
+          '"toolName":"starlight_propose_media_execution"',
+        );
         const proposed = await callback({
-          toolName: "starlight_propose_video",
+          toolName: "starlight_propose_media_execution",
           callId: "call_propose",
           arguments: {
             schemaVersion: "starlight.media-execution-intent.v2",
+            idempotencyKey: "proposal:h3:one-output:001",
+            kind: "video",
+            schemaBindingId: bindingId,
+            subject: { kind: "none" },
+            references: { kind: "none" },
+            derivation: { kind: "new" },
             outputCount: 1,
             variants: [
               {
@@ -349,7 +376,7 @@ describe("media schema binding continuation", () => {
             ],
           },
           threadId: "thread_test",
-          turnId: "codex_turn_b",
+          turnId: "codex_turn_a",
         });
         expect(proposed).toMatchObject({ success: true });
         return "Starlight durably accepted one operation.";
@@ -368,12 +395,16 @@ describe("media schema binding continuation", () => {
     });
     await runtime.run(controller.signal);
 
-    expect(generateInputs).toHaveLength(2);
-    expect(generateInputs[0]?.internalContinuation).toBeUndefined();
-    expect(generateInputs[1]).toMatchObject({
-      internalContinuation: { bindingId },
-      dynamicTools: [{ name: "starlight_propose_video" }],
-    });
+    expect(generateInputs).toHaveLength(1);
+    expect(generateInputs[0]?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "starlight_get_media_model_schema" }),
+        expect.objectContaining({
+          name: "starlight_prepare_media_schema_binding",
+        }),
+        expect.objectContaining({ name: "starlight_propose_media_execution" }),
+      ]),
+    );
     expect(proposeMediaExecution).toHaveBeenCalledTimes(1);
     expect(completeTurn).toHaveBeenCalledTimes(1);
   });

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 
 const forbidden = [
@@ -27,6 +27,7 @@ const candidates = execFileSync(
   .trim()
   .split("\n")
   .filter(Boolean)
+  .filter((file) => existsSync(file))
   .filter(
     (file) => !file.startsWith("node_modules/") && !file.startsWith("dist/"),
   );
@@ -56,7 +57,7 @@ const unexpected = files.filter(
   (file) =>
     file !== "package.json" &&
     !["README.md", "PROTOCOL.md", "SECURITY.md"].includes(file) &&
-    file !== "fixtures/media-tool-reattachment.v1.json" &&
+    file !== "fixtures/media-proposal-compatibility.v1.json" &&
     !file.startsWith("dist/"),
 );
 if (unexpected.length > 0) {

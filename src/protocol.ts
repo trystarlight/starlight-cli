@@ -12,10 +12,15 @@ export const AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME =
   "starlight_search_media_models" as const;
 export const AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME =
   "starlight_get_media_model_schema" as const;
+export const AGENT_MEDIA_SCHEMA_NAVIGATION_SCHEMA_VERSION =
+  "starlight.agent-media-schema-navigation.v1" as const;
+export const AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_RESULT_BYTES = 24_000;
+export const AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_INLINE_VALUE_BYTES = 8_000;
+export const AGENT_MEDIA_SCHEMA_NAVIGATION_MAXIMUM_PAGE_ENTRIES = 32;
 export const AGENT_MEDIA_SCHEMA_BINDING_TOOL_NAME =
   "starlight_prepare_media_schema_binding" as const;
 export const AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION =
-  "starlight.media-schema-binding.v1" as const;
+  "starlight.media-schema-binding.v2" as const;
 export const AGENT_MEDIA_TOOL_FAILURE_SCHEMA_VERSION =
   "starlight.agent-media-tool-failure.v1" as const;
 
@@ -72,6 +77,91 @@ export interface AgentMediaToolFailure {
   readonly correlationId?: string;
 }
 
+export type AgentMediaSchemaDocument = "input" | "output" | "openapi";
+export type AgentMediaSchemaNodeType =
+  "object" | "array" | "string" | "number" | "boolean" | "null";
+
+export interface AgentMediaSchemaNavigationRequest {
+  readonly endpointId: string;
+  readonly schemaFingerprint?: string;
+  readonly document?: AgentMediaSchemaDocument;
+  readonly pointer?: string;
+  readonly cursor?: number;
+}
+
+interface AgentMediaSchemaNavigationBase {
+  readonly schemaVersion: typeof AGENT_MEDIA_SCHEMA_NAVIGATION_SCHEMA_VERSION;
+  readonly endpointId: string;
+  readonly schemaFingerprint: string;
+  readonly operationCreated: false;
+  readonly providerDispatchStarted: false;
+}
+
+export type AgentMediaSchemaNavigationResult =
+  | (AgentMediaSchemaNavigationBase & {
+      readonly disposition: "schema-stale";
+      readonly code: "provider-schema-stale";
+      readonly field: "arguments.schemaFingerprint";
+      readonly requestedSchemaFingerprint: string;
+      readonly message: string;
+      readonly schemaRefreshAllowed: true;
+      readonly mustStop: false;
+    })
+  | (AgentMediaSchemaNavigationBase & {
+      readonly disposition: "invalid-pointer";
+      readonly code: "schema-pointer-invalid" | "schema-cursor-invalid";
+      readonly field: "arguments.pointer" | "arguments.cursor";
+      readonly document: AgentMediaSchemaDocument;
+      readonly pointer: string;
+      readonly message: string;
+      readonly schemaRefreshAllowed: false;
+      readonly mustStop: false;
+    })
+  | (AgentMediaSchemaNavigationBase & {
+      readonly disposition: "node";
+      readonly binding: Readonly<{
+        endpointId: string;
+        schemaFingerprint: string;
+      }>;
+      readonly documents: readonly Readonly<{
+        document: AgentMediaSchemaDocument;
+        pointer: "";
+        nodeType: AgentMediaSchemaNodeType;
+        byteLength: number;
+      }>[];
+      readonly document: AgentMediaSchemaDocument;
+      readonly pointer: string;
+      readonly nodeType: AgentMediaSchemaNodeType;
+      readonly byteLength: number;
+      readonly valueComplete: boolean;
+      readonly value?: unknown;
+      readonly children?: Readonly<{
+        cursor: number;
+        nextCursor: number | null;
+        total: number;
+        entries: readonly Readonly<{
+          index: number;
+          token: string;
+          pointer: string;
+          nodeType: AgentMediaSchemaNodeType;
+          byteLength: number;
+          inline: boolean;
+        }>[];
+      }>;
+      readonly scalarPage?: Readonly<{
+        encoding: "unicode-code-points";
+        cursor: number;
+        nextCursor: number | null;
+        total: number;
+        text: string;
+      }>;
+      readonly limits: Readonly<{
+        maximumResultBytes: number;
+        maximumInlineValueBytes: number;
+        maximumPageEntries: number;
+      }>;
+    });
+
 export const AGENT_MEDIA_EXECUTION_PROPOSAL_TOOL_NAMES = [
   "starlight_propose_voice_design",
   "starlight_propose_adopted_speech",
@@ -122,8 +212,10 @@ export interface AgentMediaSchemaBinding {
     readonly endpointId: string;
     readonly schemaFingerprint: string;
   }[];
-  readonly toolDefinition: AgentDriverToolDefinition;
-  readonly continuationInstructions: string;
+  readonly proposalContract: Readonly<{
+    readonly schemaVersion: "starlight.media-execution-intent.v2";
+    readonly toolName: typeof AGENT_MEDIA_EXECUTION_TOOL_NAME;
+  }>;
   readonly expiresAt: number;
   readonly nextEventSequence: number;
   readonly operationCreated: false;
@@ -474,11 +566,20 @@ export function isAgentDriverToolName(
   );
 }
 
-export function applyAgentDriverBoundArguments(
+export function applyLegacyAgentMediaProposalCompatibility(
   definition: AgentDriverToolDefinition,
+  toolName: AgentMediaExecutionProposalToolName,
   value: JsonRecord,
+  authenticatedCallId: string,
 ): JsonRecord {
-  return Object.freeze({ ...value, ...(definition.boundArguments ?? {}) });
+  if (definition.name !== toolName) {
+    throw new Error("Legacy media proposal definition identity is invalid");
+  }
+  return Object.freeze({
+    ...value,
+    idempotencyKey: value["idempotencyKey"] ?? authenticatedCallId,
+    ...(definition.boundArguments ?? {}),
+  });
 }
 
 export function agentMediaToolOperationKind(input: {
