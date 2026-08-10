@@ -57,20 +57,11 @@ export interface CodexTextInput {
   readonly executionProfile?: AgentExecutionProfile;
   readonly dynamicTools?: readonly AgentDriverToolDefinition[];
   readonly callbacks?: CodexTurnCallbacks;
-  readonly internalContinuation?: {
-    readonly bindingId: string;
-  };
   readonly messages: readonly {
     readonly role: "user" | "assistant";
     readonly text: string;
     readonly parts?: readonly CodexMessagePart[];
   }[];
-}
-
-export function codexInternalContinuationInput(
-  continuation: CodexTextInput["internalContinuation"],
-): readonly never[] | null {
-  return continuation === undefined ? null : [];
 }
 
 interface CodexInputAttachment {
@@ -112,30 +103,54 @@ export interface CodexTurnCallbacks {
   }) => Promise<void>;
 }
 
-export const CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES = 32_000;
+export const CODEX_DYNAMIC_TOOL_ARGUMENTS_MAXIMUM_BYTES = 32_000;
+export const CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES = 128_000;
+
+function utf8ByteLength(value: string) {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+export function codexDynamicToolArgumentsFailure(
+  input: Readonly<Record<string, unknown>>,
+) {
+  const measuredBytes = utf8ByteLength(JSON.stringify(input));
+  if (measuredBytes <= CODEX_DYNAMIC_TOOL_ARGUMENTS_MAXIMUM_BYTES) return null;
+  return {
+    success: false,
+    text: JSON.stringify({
+      schemaVersion: "starlight.dynamic-tool-arguments-transport.v1",
+      complete: false,
+      code: "arguments-too-large",
+      measuredBytes,
+      maximumBytes: CODEX_DYNAMIC_TOOL_ARGUMENTS_MAXIMUM_BYTES,
+      mustStop: true,
+      operationCreated: false,
+      providerDispatchStarted: false,
+      message:
+        "The complete Starlight tool arguments exceeded the explicit app-server callback boundary. The callback was not dispatched. Do not simplify or retry this call automatically.",
+    }),
+  } as const;
+}
 
 export function codexDynamicToolResult(input: {
   readonly toolName: AgentDriverToolName;
   readonly success: boolean;
   readonly text: string;
 }) {
-  if (
-    new TextEncoder().encode(input.text).byteLength <=
-    CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES
-  ) {
+  if (utf8ByteLength(input.text) <= CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES) {
     return { success: input.success, text: input.text };
   }
   return {
     success: false,
     text: JSON.stringify({
-      schemaVersion: "starlight.driver-tool-result-error.v1",
-      code: "tool-result-too-large",
-      toolName: input.toolName,
+      schemaVersion: "starlight.dynamic-tool-result-transport.v1",
+      complete: false,
+      code: "result-too-large",
+      measuredBytes: utf8ByteLength(input.text),
       message:
-        "The authoritative Starlight tool result exceeds this driver version's safe callback limit. No result was truncated; update the CLI before continuing.",
+        "The complete Starlight tool result exceeded the explicit app-server callback boundary. No prefix was returned. Do not retry this call.",
       maximumBytes: CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES,
-      operationCreated: false,
-      providerDispatchStarted: false,
+      mustStop: true,
     }),
   };
 }
@@ -1201,11 +1216,7 @@ export class CodexAppServerClient {
         "Starlight turn context must end with the current user message",
       );
     }
-    const internalContinuationInput = codexInternalContinuationInput(
-      input.internalContinuation,
-    );
-    const currentInput =
-      internalContinuationInput ?? (await this.materializeInput(current));
+    const currentInput = await this.materializeInput(current);
     let turnResult: JsonRecord;
     this.activeCapability = "text";
     this.turnStartCallbacks = input.callbacks ?? null;
@@ -1223,22 +1234,8 @@ export class CodexAppServerClient {
             },
             ...workingSetContext(input.workingSet),
             ...mediaExecutionContext(input.workingSet),
-            ...(input.internalContinuation === undefined
-              ? {}
-              : {
-                  starlightInternalContinuation: {
-                    kind: "untrusted" as const,
-                    value: JSON.stringify({
-                      bindingId: input.internalContinuation.bindingId,
-                      instruction:
-                        "Continue the current Starlight turn with the exact server-bound tool. This is not a new user message.",
-                    }),
-                  },
-                }),
           },
-          ...(input.internalContinuation === undefined
-            ? { clientUserMessageId: input.clientUserMessageId ?? input.turnId }
-            : {}),
+          clientUserMessageId: input.clientUserMessageId ?? input.turnId,
           approvalPolicy: "never",
           cwd: this.workspace,
           runtimeWorkspaceRoots: [this.workspace],
@@ -2052,12 +2049,21 @@ export class CodexAppServerClient {
       typeof tool !== "string" ||
       namespace !== null ||
       !isRecord(args) ||
-      JSON.stringify(args).length > 32_000 ||
       names === undefined ||
       !names.has(tool) ||
       callbacks?.onDynamicToolCall === undefined
     ) {
       this.rejectServerRequest(id, "item/tool/call");
+      return;
+    }
+    const argumentsFailure = codexDynamicToolArgumentsFailure(args);
+    if (argumentsFailure !== null) {
+      this.serverResponse(id, {
+        result: {
+          success: false,
+          contentItems: [{ type: "inputText", text: argumentsFailure.text }],
+        },
+      });
       return;
     }
     this.refreshTurnTimeout(turnId);
@@ -2118,7 +2124,14 @@ export class CodexAppServerClient {
             contentItems: [
               {
                 type: "inputText",
-                text: "Starlight could not confirm the durable media-tool outcome. Do not retry this call.",
+                text: JSON.stringify({
+                  schemaVersion: "starlight.dynamic-tool-callback-transport.v1",
+                  complete: false,
+                  code: "callback-failed",
+                  mustStop: true,
+                  message:
+                    "Starlight could not return a complete tool result. Stop and inspect durable state; do not retry this call.",
+                }),
               },
             ],
           },

@@ -1,0 +1,263 @@
+{
+  "schemaVersion": "starlight.media-proposal-compatibility-fixture.v1",
+  "transport": {
+    "schemaNavigationVersion": "starlight.agent-media-schema-navigation.v1",
+    "maximumSchemaResultBytes": 24000,
+    "maximumInlineSchemaValueBytes": 8000,
+    "maximumSchemaPageEntries": 32,
+    "appServerToolResultMaximumBytes": 128000,
+    "oversizeBehavior": "fail-closed-without-prefix"
+  },
+  "searchResult": {
+    "schemaVersion": "starlight.agent-media-model-search.v1",
+    "source": "fal-model-search",
+    "query": "MiniMax H3 text to video",
+    "models": [
+      {
+        "endpointId": "minimax/h3/text-to-video",
+        "displayName": "MiniMax H3 Text to Video",
+        "category": "video",
+        "description": "Live provider fixture metadata.",
+        "providerUpdatedAt": "2026-08-10T00:00:00Z"
+      }
+    ]
+  },
+  "schemaNavigationRoot": {
+    "schemaVersion": "starlight.agent-media-schema-navigation.v1",
+    "endpointId": "minimax/h3/text-to-video",
+    "schemaFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "operationCreated": false,
+    "providerDispatchStarted": false,
+    "disposition": "node",
+    "binding": {
+      "endpointId": "minimax/h3/text-to-video",
+      "schemaFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "documents": [
+      { "document": "input", "pointer": "", "nodeType": "object", "byteLength": 12784 },
+      { "document": "output", "pointer": "", "nodeType": "object", "byteLength": 1180 },
+      { "document": "openapi", "pointer": "", "nodeType": "object", "byteLength": 29440 }
+    ],
+    "document": "input",
+    "pointer": "",
+    "nodeType": "object",
+    "byteLength": 12784,
+    "valueComplete": false,
+    "children": {
+      "cursor": 0,
+      "nextCursor": null,
+      "total": 4,
+      "entries": [
+        {
+          "index": 0,
+          "token": "$defs",
+          "pointer": "/$defs",
+          "nodeType": "object",
+          "byteLength": 9040,
+          "inline": false
+        },
+        {
+          "index": 1,
+          "token": "additionalProperties",
+          "pointer": "/additionalProperties",
+          "nodeType": "boolean",
+          "byteLength": 5,
+          "inline": true
+        },
+        {
+          "index": 2,
+          "token": "properties",
+          "pointer": "/properties",
+          "nodeType": "object",
+          "byteLength": 3490,
+          "inline": true
+        },
+        {
+          "index": 3,
+          "token": "required",
+          "pointer": "/required",
+          "nodeType": "array",
+          "byteLength": 38,
+          "inline": true
+        }
+      ]
+    },
+    "limits": {
+      "maximumResultBytes": 24000,
+      "maximumInlineValueBytes": 8000,
+      "maximumPageEntries": 32
+    }
+  },
+  "schemaNavigationProperty": {
+    "schemaVersion": "starlight.agent-media-schema-navigation.v1",
+    "endpointId": "minimax/h3/text-to-video",
+    "schemaFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "operationCreated": false,
+    "providerDispatchStarted": false,
+    "disposition": "node",
+    "binding": {
+      "endpointId": "minimax/h3/text-to-video",
+      "schemaFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "documents": [
+      { "document": "input", "pointer": "", "nodeType": "object", "byteLength": 12784 },
+      { "document": "output", "pointer": "", "nodeType": "object", "byteLength": 1180 },
+      { "document": "openapi", "pointer": "", "nodeType": "object", "byteLength": 29440 }
+    ],
+    "document": "input",
+    "pointer": "/properties/duration",
+    "nodeType": "object",
+    "byteLength": 42,
+    "valueComplete": true,
+    "value": { "type": "integer", "enum": [5, 10] },
+    "limits": {
+      "maximumResultBytes": 24000,
+      "maximumInlineValueBytes": 8000,
+      "maximumPageEntries": 32
+    }
+  },
+  "schemaBinding": {
+    "schemaVersion": "starlight.media-schema-binding.v2",
+    "bindingId": "binding_00000000-0000-4000-8000-000000000004",
+    "kind": "video",
+    "endpoints": [
+      {
+        "endpointId": "minimax/h3/text-to-video",
+        "schemaFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ],
+    "proposalContract": {
+      "schemaVersion": "starlight.media-execution-intent.v2",
+      "toolName": "starlight_propose_media_execution"
+    },
+    "expiresAt": 1786331400000,
+    "nextEventSequence": 4,
+    "operationCreated": false,
+    "providerDispatchStarted": false
+  },
+  "proposalSemantics": {
+    "toolName": "starlight_propose_media_execution",
+    "schemaVersion": "starlight.media-execution-intent.v2",
+    "providerSchemaEmbedded": false,
+    "requiredVideoFields": [
+      "schemaVersion",
+      "idempotencyKey",
+      "kind",
+      "schemaBindingId",
+      "subject",
+      "references",
+      "derivation",
+      "outputCount",
+      "variants"
+    ],
+    "requiredProviderVariantFields": [
+      "endpointId",
+      "schemaFingerprint",
+      "providerInput",
+      "requestedModel",
+      "selectionReason"
+    ],
+    "serverAuthoritative": [
+      "endpoint-admission",
+      "binding-freshness",
+      "provider-schema-validation",
+      "workspace-authorization",
+      "spend-reservation",
+      "operation-identity",
+      "dispatch-and-recovery"
+    ]
+  },
+  "validMultiOutputProposal": {
+    "schemaVersion": "starlight.media-execution-intent.v2",
+    "idempotencyKey": "fixture:h3:two-output:001",
+    "kind": "video",
+    "schemaBindingId": "binding_00000000-0000-4000-8000-000000000004",
+    "subject": { "kind": "none" },
+    "references": { "kind": "none" },
+    "derivation": { "kind": "new" },
+    "outputCount": 2,
+    "variants": [
+      {
+        "endpointId": "minimax/h3/text-to-video",
+        "schemaFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "providerInput": { "prompt": "A quiet camera move over still water.", "duration": 5 },
+        "requestedModel": "MiniMax H3",
+        "selectionReason": "The current live schema matches output one."
+      },
+      {
+        "endpointId": "minimax/h3/text-to-video",
+        "schemaFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "providerInput": { "prompt": "A deliberate push toward the subject.", "duration": 10 },
+        "requestedModel": "MiniMax H3",
+        "selectionReason": "The current live schema matches output two."
+      }
+    ]
+  },
+  "invalidFieldExample": {
+    "schemaVersion": "starlight.agent-media-tool-failure.v1",
+    "code": "provider-schema-invalid",
+    "phase": "provider-schema",
+    "message": "providerInput.duration is required.",
+    "field": "arguments.variants.0.providerInput.duration",
+    "accepted": false,
+    "operationCreated": false,
+    "providerDispatchStarted": false,
+    "mechanicallyRetryable": true,
+    "requiresUserClarification": false,
+    "mustStop": false,
+    "schemaRefreshAllowed": false,
+    "nextEventSequence": 5
+  },
+  "staleSchemaExample": {
+    "schemaVersion": "starlight.agent-media-tool-failure.v1",
+    "code": "provider-schema-stale",
+    "phase": "schema-stale",
+    "message": "Restart bounded navigation from the current root once; no operation was created.",
+    "field": "arguments.variants.0.schemaFingerprint",
+    "accepted": false,
+    "operationCreated": false,
+    "providerDispatchStarted": false,
+    "mechanicallyRetryable": true,
+    "requiresUserClarification": false,
+    "mustStop": false,
+    "schemaRefreshAllowed": true,
+    "nextEventSequence": 5
+  },
+  "internalFailureExample": {
+    "schemaVersion": "starlight.agent-media-tool-failure.v1",
+    "code": "platform-internal",
+    "phase": "platform-internal",
+    "message": "Starlight could not safely create the proposal. Do not change or retry the request.",
+    "accepted": false,
+    "operationCreated": false,
+    "providerDispatchStarted": false,
+    "mechanicallyRetryable": false,
+    "requiresUserClarification": false,
+    "mustStop": true,
+    "schemaRefreshAllowed": false,
+    "correlationId": "failure_00000000-0000-4000-8000-000000000005"
+  },
+  "acceptedResult": {
+    "schemaVersion": "starlight.media-execution-result.v1",
+    "disposition": "accepted",
+    "proposalId": "proposal_fixture_exact_batch",
+    "requestedOutputCount": 2,
+    "expectedOperationCount": 2,
+    "operations": [
+      {
+        "operationId": "operation_fixture_exact_1",
+        "actionId": "action_fixture_exact_1",
+        "ordinal": 1,
+        "status": "planned"
+      },
+      {
+        "operationId": "operation_fixture_exact_2",
+        "actionId": "action_fixture_exact_2",
+        "ordinal": 2,
+        "status": "planned"
+      }
+    ],
+    "nextEventSequence": 6,
+    "replayed": false
+  }
+}

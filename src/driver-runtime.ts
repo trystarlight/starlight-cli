@@ -6,7 +6,7 @@ import {
   AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME,
   AGENT_MEDIA_SCHEMA_BINDING_TOOL_NAME,
   AGENT_SESSION_MEDIA_TOOL_NAME,
-  applyAgentDriverBoundArguments,
+  applyLegacyAgentMediaProposalCompatibility,
   agentMediaToolOperationKind,
   isAgentCharacterToolName,
   isAgentMediaExecutionProposalToolName,
@@ -15,7 +15,6 @@ import {
   type AgentDriverToolName,
   type AgentExecutionProfile,
   type AgentMediaExecutionResult,
-  type AgentMediaSchemaBinding,
   type AgentMediaToolFailure,
   type AgentToolActionEventProjection,
 } from "./protocol.js";
@@ -219,8 +218,6 @@ interface ActiveTurn {
   imageArchivedCount: number;
   readonly definitiveToolRejections: string[];
   mediaToolStopFailure: AgentMediaToolFailure | null;
-  mediaSchemaBinding: AgentMediaSchemaBinding | null;
-  mediaSchemaContinuationUsed: boolean;
   hasSuccessfulToolCall: boolean;
   imageExecution: {
     readonly proposalId: string;
@@ -588,8 +585,6 @@ export class AgentDriverRuntime {
       imageArchivedCount: 0,
       definitiveToolRejections: [],
       mediaToolStopFailure: null,
-      mediaSchemaBinding: null,
-      mediaSchemaContinuationUsed: false,
       hasSuccessfulToolCall: false,
       imageExecution: null,
       resultBlocks: [],
@@ -904,19 +899,17 @@ export class AgentDriverRuntime {
                 input.toolName === AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME ||
                 input.toolName === AGENT_MEDIA_SCHEMA_BINDING_TOOL_NAME ||
                 input.toolName === AGENT_MEDIA_EXECUTION_TOOL_NAME ||
-                isAgentMediaExecutionProposalToolName(input.toolName))
+                isAgentMediaExecutionProposalToolName(input.toolName) ||
+                isAgentMediaToolName(input.toolName))
             ) {
               return {
                 success: false,
                 text: JSON.stringify(active.mediaToolStopFailure),
               };
             }
-            const definition = [
-              ...(active.mediaSchemaBinding === null
-                ? []
-                : [active.mediaSchemaBinding.toolDefinition]),
-              ...driverInstructions.tools,
-            ].find((candidate) => candidate.name === input.toolName);
+            const definition = driverInstructions.tools.find(
+              (candidate) => candidate.name === input.toolName,
+            );
             if (definition === undefined) {
               throw new Error(
                 "The selected Starlight tool is missing from the authenticated instruction contract",
@@ -927,15 +920,6 @@ export class AgentDriverRuntime {
               input.arguments,
             );
             if (!validation.valid) {
-              if (active.mediaSchemaBinding?.toolDefinition === definition) {
-                active.definitiveToolRejections.push(
-                  validation.failure.message,
-                );
-                return {
-                  success: false,
-                  text: toolInputFeedback(validation.failure),
-                };
-              }
               const rejection = await this.api.rejectToolCall({
                 leaseId: claim.lease.leaseId,
                 fencingToken: claim.lease.fencingToken,
@@ -957,6 +941,36 @@ export class AgentDriverRuntime {
                 }),
               };
             }
+            if (input.toolName === AGENT_MEDIA_EXECUTION_TOOL_NAME) {
+              const idempotencyKey = input.arguments["idempotencyKey"];
+              if (
+                typeof idempotencyKey !== "string" ||
+                !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(idempotencyKey)
+              ) {
+                const rejection = await this.api.rejectToolCall({
+                  leaseId: claim.lease.leaseId,
+                  fencingToken: claim.lease.fencingToken,
+                  expectedSequence: active.nextEventSequence,
+                  toolName: input.toolName,
+                  callId: input.callId,
+                  arguments: input.arguments,
+                  sourceRuntimeVersion,
+                  driverRuntimeVersion: STARLIGHT_CLI_VERSION,
+                });
+                active.nextEventSequence = rejection.nextEventSequence;
+                active.definitiveToolRejections.push(
+                  "idempotencyKey is required.",
+                );
+                return {
+                  success: false,
+                  text: toolInputFeedback({
+                    ...rejection,
+                    field: "idempotencyKey",
+                    message: "idempotencyKey is required.",
+                  }),
+                };
+              }
+            }
             if (input.toolName === AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME) {
               const result = await this.api.searchMediaModels({
                 leaseId: claim.lease.leaseId,
@@ -971,25 +985,27 @@ export class AgentDriverRuntime {
                 leaseId: claim.lease.leaseId,
                 fencingToken: claim.lease.fencingToken,
                 endpointId,
+                ...(typeof input.arguments["schemaFingerprint"] === "string"
+                  ? { schemaFingerprint: input.arguments["schemaFingerprint"] }
+                  : {}),
+                ...(input.arguments["document"] === "input" ||
+                input.arguments["document"] === "output" ||
+                input.arguments["document"] === "openapi"
+                  ? { document: input.arguments["document"] }
+                  : {}),
+                ...(typeof input.arguments["pointer"] === "string"
+                  ? { pointer: input.arguments["pointer"] }
+                  : {}),
+                ...(typeof input.arguments["cursor"] === "number"
+                  ? { cursor: input.arguments["cursor"] }
+                  : {}),
               });
-              return { success: true, text: JSON.stringify(result) };
+              return {
+                success: result.disposition === "node",
+                text: JSON.stringify(result),
+              };
             }
             if (input.toolName === AGENT_MEDIA_SCHEMA_BINDING_TOOL_NAME) {
-              if (active.mediaSchemaBinding !== null) {
-                return {
-                  success: true,
-                  text: JSON.stringify({
-                    schemaVersion: active.mediaSchemaBinding.schemaVersion,
-                    bindingId: active.mediaSchemaBinding.bindingId,
-                    kind: active.mediaSchemaBinding.kind,
-                    endpoints: active.mediaSchemaBinding.endpoints,
-                    expiresAt: active.mediaSchemaBinding.expiresAt,
-                    operationCreated: false,
-                    providerDispatchStarted: false,
-                    internalContinuationPrepared: true,
-                  }),
-                };
-              }
               const result = await this.api.prepareMediaSchemaBinding({
                 leaseId: claim.lease.leaseId,
                 fencingToken: claim.lease.fencingToken,
@@ -1000,19 +1016,9 @@ export class AgentDriverRuntime {
                 driverRuntimeVersion: STARLIGHT_CLI_VERSION,
               });
               active.nextEventSequence = result.nextEventSequence;
-              active.mediaSchemaBinding = result;
               return {
                 success: true,
-                text: JSON.stringify({
-                  schemaVersion: result.schemaVersion,
-                  bindingId: result.bindingId,
-                  kind: result.kind,
-                  endpoints: result.endpoints,
-                  expiresAt: result.expiresAt,
-                  operationCreated: false,
-                  providerDispatchStarted: false,
-                  internalContinuationPrepared: true,
-                }),
+                text: JSON.stringify(result),
               };
             }
             if (input.toolName === AGENT_SESSION_MEDIA_TOOL_NAME) {
@@ -1085,10 +1091,16 @@ export class AgentDriverRuntime {
               input.toolName === AGENT_MEDIA_EXECUTION_TOOL_NAME ||
               isAgentMediaExecutionProposalToolName(input.toolName)
             ) {
-              const executionArguments = applyAgentDriverBoundArguments(
-                definition,
-                input.arguments,
-              );
+              const executionArguments = isAgentMediaExecutionProposalToolName(
+                input.toolName,
+              )
+                ? applyLegacyAgentMediaProposalCompatibility(
+                    definition,
+                    input.toolName,
+                    input.arguments,
+                    input.callId,
+                  )
+                : input.arguments;
               const result = await this.api.proposeMediaExecution({
                 leaseId: claim.lease.leaseId,
                 fencingToken: claim.lease.fencingToken,
@@ -1251,7 +1263,7 @@ export class AgentDriverRuntime {
           }
         },
       };
-      let response = await this.codex.generateText({
+      const response = await this.codex.generateText({
         sessionId: `${this.driverSessionNamespace}:${context.session.sessionId}`,
         sessionTitle: context.session.title,
         turnId: claim.turn.turnId,
@@ -1267,32 +1279,6 @@ export class AgentDriverRuntime {
       });
       if (active.interventionError !== null) throw active.interventionError;
       if (outerSignal.aborted) return false;
-      if (
-        active.mediaSchemaBinding !== null &&
-        !active.mediaSchemaContinuationUsed
-      ) {
-        const binding = active.mediaSchemaBinding;
-        active.mediaSchemaContinuationUsed = true;
-        await this.codex.stop();
-        if (outerSignal.aborted) return false;
-        response = await this.codex.generateText({
-          sessionId: `${this.driverSessionNamespace}:${context.session.sessionId}`,
-          sessionTitle: context.session.title,
-          turnId: claim.turn.turnId,
-          clientUserMessageId: `${claim.turn.turnId}:media-schema:${binding.bindingId}`,
-          systemImageGenerationAvailable: false,
-          behaviorProfileVersion: claim.turn.behaviorProfileVersion,
-          driverInstructions: `${driverInstructions.text}\n\n${binding.continuationInstructions}`,
-          workingSet: context.workingSet,
-          executionProfile: claim.turn.routing.executionProfile,
-          messages,
-          dynamicTools: [binding.toolDefinition],
-          callbacks: toolCallbacks,
-          internalContinuation: { bindingId: binding.bindingId },
-        });
-        if (active.interventionError !== null) throw active.interventionError;
-        if (outerSignal.aborted) return false;
-      }
       if (!this.capableImageGeneration || active.imageExecution === null) {
         await this.completeTextTurn(active, response);
         return true;
