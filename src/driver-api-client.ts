@@ -11,8 +11,10 @@ import type {
   AgentExecutionProfile,
   AgentExecutionRoutingProjection,
   AgentInputCapability,
-  AgentMediaToolName,
   AgentMediaExecutionResult,
+  AgentMediaSchemaBinding,
+  AgentMediaToolFailure,
+  AgentMediaToolName,
   AgentSessionMediaResolution,
   AGENT_SESSION_MEDIA_TOOL_NAME,
   AgentMessagePart,
@@ -25,6 +27,10 @@ import type {
 import { assertSupportedDynamicToolSchema } from "./dynamic-tool-validation.js";
 import {
   AGENT_DRIVER_INSTRUCTIONS_SCHEMA_VERSION,
+  AGENT_MEDIA_TOOL_FAILURE_CODES,
+  AGENT_MEDIA_TOOL_FAILURE_PHASES,
+  AGENT_MEDIA_TOOL_FAILURE_SCHEMA_VERSION,
+  AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION,
   isAgentDriverToolName,
   requireAgentWorkingSetProjection,
   requireAgentSessionMediaResolution,
@@ -111,6 +117,7 @@ interface AgentDriverSessionContext {
 
 export class AgentDriverApiError extends Error {
   readonly nextEventSequence: number | null;
+  readonly mediaFailure: AgentMediaToolFailure | null;
 
   constructor(
     message: string,
@@ -120,14 +127,20 @@ export class AgentDriverApiError extends Error {
       | "driver-capability-unavailable"
       | "resource-mismatch"
       | "lease-lost"
+      | "media-tool-failure"
+      | "platform-failure"
       | "request-rejected"
       | "outcome-ambiguous",
     readonly status: number | null,
-    options: ErrorOptions & { readonly nextEventSequence?: number } = {},
+    options: ErrorOptions & {
+      readonly nextEventSequence?: number;
+      readonly mediaFailure?: AgentMediaToolFailure;
+    } = {},
   ) {
     super(message, options);
     this.name = "AgentDriverApiError";
     this.nextEventSequence = options.nextEventSequence ?? null;
+    this.mediaFailure = options.mediaFailure ?? null;
   }
 }
 
@@ -165,6 +178,193 @@ function integer(value: unknown, label: string) {
     throw new Error(`${label} is invalid`);
   }
   return value;
+}
+
+export function parseAgentMediaToolFailure(
+  value: unknown,
+): AgentMediaToolFailure | null {
+  if (!isRecord(value)) return null;
+  if (value["schemaVersion"] !== AGENT_MEDIA_TOOL_FAILURE_SCHEMA_VERSION) {
+    return null;
+  }
+  const code = value["code"];
+  const phase = value["phase"];
+  const message = value["message"];
+  const field = value["field"];
+  const nextEventSequence = value["nextEventSequence"];
+  const correlationId = value["correlationId"];
+  if (
+    typeof code !== "string" ||
+    !AGENT_MEDIA_TOOL_FAILURE_CODES.includes(
+      code as (typeof AGENT_MEDIA_TOOL_FAILURE_CODES)[number],
+    ) ||
+    typeof phase !== "string" ||
+    !AGENT_MEDIA_TOOL_FAILURE_PHASES.includes(
+      phase as (typeof AGENT_MEDIA_TOOL_FAILURE_PHASES)[number],
+    ) ||
+    typeof message !== "string" ||
+    message.length < 1 ||
+    message.length > 500 ||
+    (field !== undefined &&
+      (typeof field !== "string" ||
+        !/^[A-Za-z0-9_$.[\]-]{1,240}$/u.test(field))) ||
+    value["accepted"] !== false ||
+    value["operationCreated"] !== false ||
+    value["providerDispatchStarted"] !== false ||
+    typeof value["mechanicallyRetryable"] !== "boolean" ||
+    typeof value["requiresUserClarification"] !== "boolean" ||
+    typeof value["mustStop"] !== "boolean" ||
+    (value["mechanicallyRetryable"] && value["mustStop"]) ||
+    typeof value["schemaRefreshAllowed"] !== "boolean" ||
+    (value["schemaRefreshAllowed"] && phase !== "schema-stale") ||
+    (nextEventSequence !== undefined &&
+      (typeof nextEventSequence !== "number" ||
+        !Number.isSafeInteger(nextEventSequence) ||
+        nextEventSequence < 1)) ||
+    (correlationId !== undefined &&
+      (typeof correlationId !== "string" ||
+        !/^failure_[0-9a-f-]{36}$/u.test(correlationId)))
+  ) {
+    throw new Error("Agent media tool failure response is invalid");
+  }
+  return {
+    schemaVersion: AGENT_MEDIA_TOOL_FAILURE_SCHEMA_VERSION,
+    code: code as AgentMediaToolFailure["code"],
+    phase: phase as AgentMediaToolFailure["phase"],
+    message,
+    ...(field === undefined ? {} : { field: field as string }),
+    accepted: false,
+    operationCreated: false,
+    providerDispatchStarted: false,
+    mechanicallyRetryable: value["mechanicallyRetryable"],
+    requiresUserClarification: value["requiresUserClarification"],
+    mustStop: value["mustStop"],
+    schemaRefreshAllowed: value["schemaRefreshAllowed"],
+    ...(nextEventSequence === undefined ? {} : { nextEventSequence }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  };
+}
+
+export function parseAgentDriverToolDefinition(
+  value: unknown,
+): AgentDriverToolDefinition {
+  const tool = record(value, "Agent driver tool definition");
+  const capability = tool["capability"];
+  if (
+    capability !== "text" &&
+    capability !== "image" &&
+    capability !== "media-video" &&
+    capability !== "media-voice-design" &&
+    capability !== "media-speech"
+  ) {
+    throw new Error("Agent driver tool capability is invalid");
+  }
+  const name = tool["name"];
+  if (!isAgentDriverToolName(name)) {
+    throw new Error("Agent driver tool name is unsupported");
+  }
+  const inputSchema = record(
+    tool["inputSchema"],
+    "Agent driver tool input schema",
+  );
+  assertSupportedDynamicToolSchema(inputSchema);
+  const rawBoundArguments = tool["boundArguments"];
+  const boundArguments =
+    rawBoundArguments === undefined
+      ? undefined
+      : record(rawBoundArguments, "Agent driver tool bound arguments");
+  return {
+    schemaVersion: text(
+      tool["schemaVersion"],
+      "Agent driver tool schema version",
+    ),
+    name,
+    capability,
+    description: text(tool["description"], "Agent driver tool description"),
+    inputSchema,
+    ...(boundArguments === undefined ? {} : { boundArguments }),
+  };
+}
+
+export function parseAgentMediaSchemaBinding(
+  value: unknown,
+): AgentMediaSchemaBinding {
+  const source = record(value, "Agent media schema binding");
+  const bindingId = text(source["bindingId"], "Media schema binding ID");
+  const kind = source["kind"];
+  const endpointValues = source["endpoints"];
+  if (
+    source["schemaVersion"] !== AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION ||
+    !/^binding_[0-9a-f-]{36}$/u.test(bindingId) ||
+    (kind !== "video" && kind !== "talking-avatar") ||
+    !Array.isArray(endpointValues) ||
+    endpointValues.length < 1 ||
+    endpointValues.length > 16 ||
+    source["operationCreated"] !== false ||
+    source["providerDispatchStarted"] !== false
+  ) {
+    throw new Error("Agent media schema binding response is invalid");
+  }
+  const endpoints = endpointValues.map((value, index) => {
+    const endpoint = record(
+      value,
+      `Agent media schema binding endpoint ${String(index + 1)}`,
+    );
+    const endpointId = text(endpoint["endpointId"], "Bound endpoint ID");
+    const schemaFingerprint = text(
+      endpoint["schemaFingerprint"],
+      "Bound schema fingerprint",
+    );
+    if (
+      !/^[a-z0-9][a-z0-9./_-]{2,199}$/u.test(endpointId) ||
+      !/^sha256:[a-f0-9]{64}$/u.test(schemaFingerprint)
+    ) {
+      throw new Error("Agent media schema binding endpoint is invalid");
+    }
+    return { endpointId, schemaFingerprint };
+  });
+  if (
+    new Set(
+      endpoints.map(
+        (endpoint) =>
+          `${endpoint.endpointId}\u0000${endpoint.schemaFingerprint}`,
+      ),
+    ).size !== endpoints.length
+  ) {
+    throw new Error("Agent media schema binding endpoints are not unique");
+  }
+  const toolDefinition = parseAgentDriverToolDefinition(
+    source["toolDefinition"],
+  );
+  const expectedName =
+    kind === "video"
+      ? "starlight_propose_video"
+      : "starlight_propose_talking_avatar";
+  if (
+    toolDefinition.name !== expectedName ||
+    toolDefinition.boundArguments?.["kind"] !== kind ||
+    toolDefinition.boundArguments["schemaBindingId"] !== bindingId
+  ) {
+    throw new Error("Agent media schema binding tool identity is invalid");
+  }
+  return {
+    schemaVersion: AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION,
+    bindingId,
+    kind,
+    endpoints,
+    toolDefinition,
+    continuationInstructions: text(
+      source["continuationInstructions"],
+      "Media schema binding continuation instructions",
+    ),
+    expiresAt: integer(source["expiresAt"], "Media schema binding expiry"),
+    nextEventSequence: integer(
+      source["nextEventSequence"],
+      "Media schema binding next event sequence",
+    ),
+    operationCreated: false,
+    providerDispatchStarted: false,
+  };
 }
 
 function mediaAction(value: unknown): AgentToolActionEventProjection {
@@ -749,41 +949,7 @@ export function parseAgentDriverSessionContext(
             driverInstructions: {
               schemaVersion: AGENT_DRIVER_INSTRUCTIONS_SCHEMA_VERSION,
               text: text(instructions["text"], "Agent driver instruction text"),
-              tools: tools.map((value) => {
-                const tool = record(value, "Agent driver tool definition");
-                const capability = tool["capability"];
-                if (
-                  capability !== "text" &&
-                  capability !== "image" &&
-                  capability !== "media-video" &&
-                  capability !== "media-voice-design" &&
-                  capability !== "media-speech"
-                ) {
-                  throw new Error("Agent driver tool capability is invalid");
-                }
-                const name = tool["name"];
-                if (!isAgentDriverToolName(name)) {
-                  throw new Error("Agent driver tool name is unsupported");
-                }
-                const inputSchema = record(
-                  tool["inputSchema"],
-                  "Agent driver tool input schema",
-                );
-                assertSupportedDynamicToolSchema(inputSchema);
-                return {
-                  schemaVersion: text(
-                    tool["schemaVersion"],
-                    "Agent driver tool schema version",
-                  ),
-                  name,
-                  capability,
-                  description: text(
-                    tool["description"],
-                    "Agent driver tool description",
-                  ),
-                  inputSchema,
-                };
-              }),
+              tools: tools.map(parseAgentDriverToolDefinition),
             },
           };
         })();
@@ -1005,6 +1171,30 @@ export class AgentDriverApiClient {
       }
       return body;
     }
+    let mediaFailure: AgentMediaToolFailure | null;
+    try {
+      mediaFailure = parseAgentMediaToolFailure(body);
+    } catch (error) {
+      throw new AgentDriverApiError(
+        "The Starlight media failure response was incompatible with this driver",
+        "platform-failure",
+        response.status,
+        { cause: error },
+      );
+    }
+    if (mediaFailure !== null) {
+      throw new AgentDriverApiError(
+        mediaFailure.message,
+        "media-tool-failure",
+        response.status,
+        {
+          ...(mediaFailure.nextEventSequence === undefined
+            ? {}
+            : { nextEventSequence: mediaFailure.nextEventSequence }),
+          mediaFailure,
+        },
+      );
+    }
     if (response.status === 401) {
       throw new AgentDriverApiError(
         "The Starlight credential is invalid, expired, or bound to another resource",
@@ -1058,7 +1248,7 @@ export class AgentDriverApiClient {
     }
     throw new AgentDriverApiError(
       `The Starlight driver request was rejected with HTTP ${String(response.status)}`,
-      "request-rejected",
+      "platform-failure",
       response.status,
     );
   }
@@ -1452,6 +1642,23 @@ export class AgentDriverApiClient {
       method: "POST",
       body: input,
     });
+  }
+
+  async prepareMediaSchemaBinding(input: {
+    readonly leaseId: string;
+    readonly fencingToken: number;
+    readonly expectedSequence: number;
+    readonly callId: string;
+    readonly arguments: Readonly<Record<string, unknown>>;
+    readonly sourceRuntimeVersion: string;
+    readonly driverRuntimeVersion: string;
+  }): Promise<AgentMediaSchemaBinding> {
+    return parseAgentMediaSchemaBinding(
+      await this.request("/agent/v1/turns/tools/media/bind-schema", {
+        method: "POST",
+        body: input,
+      }),
+    );
   }
 
   async downloadMediaExecutionReference(input: {

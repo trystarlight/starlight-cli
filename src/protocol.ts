@@ -12,6 +12,65 @@ export const AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME =
   "starlight_search_media_models" as const;
 export const AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME =
   "starlight_get_media_model_schema" as const;
+export const AGENT_MEDIA_SCHEMA_BINDING_TOOL_NAME =
+  "starlight_prepare_media_schema_binding" as const;
+export const AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION =
+  "starlight.media-schema-binding.v1" as const;
+export const AGENT_MEDIA_TOOL_FAILURE_SCHEMA_VERSION =
+  "starlight.agent-media-tool-failure.v1" as const;
+
+export const AGENT_MEDIA_TOOL_FAILURE_PHASES = [
+  "tool-schema",
+  "provider-schema",
+  "schema-stale",
+  "artifact-binding",
+  "subject-resolution",
+  "policy",
+  "authorization",
+  "spend",
+  "durable-proposal",
+  "turn-conflict",
+  "platform-internal",
+  "outcome-ambiguous",
+] as const;
+
+export const AGENT_MEDIA_TOOL_FAILURE_CODES = [
+  "tool-schema-invalid",
+  "provider-schema-invalid",
+  "provider-schema-stale",
+  "provider-schema-unavailable",
+  "artifact-binding-invalid",
+  "subject-resolution-required",
+  "policy-rejected",
+  "authorization-denied",
+  "spend-unavailable",
+  "durable-proposal-rejected",
+  "turn-conflict",
+  "platform-internal",
+  "outcome-ambiguous",
+] as const;
+
+export type AgentMediaToolFailurePhase =
+  (typeof AGENT_MEDIA_TOOL_FAILURE_PHASES)[number];
+export type AgentMediaToolFailureCode =
+  (typeof AGENT_MEDIA_TOOL_FAILURE_CODES)[number];
+
+export interface AgentMediaToolFailure {
+  readonly schemaVersion: typeof AGENT_MEDIA_TOOL_FAILURE_SCHEMA_VERSION;
+  readonly code: AgentMediaToolFailureCode;
+  readonly phase: AgentMediaToolFailurePhase;
+  readonly message: string;
+  readonly field?: string;
+  readonly accepted: false;
+  readonly operationCreated: false;
+  readonly providerDispatchStarted: false;
+  readonly mechanicallyRetryable: boolean;
+  readonly requiresUserClarification: boolean;
+  readonly mustStop: boolean;
+  readonly schemaRefreshAllowed: boolean;
+  readonly nextEventSequence?: number;
+  readonly correlationId?: string;
+}
 
 export const AGENT_MEDIA_EXECUTION_PROPOSAL_TOOL_NAMES = [
   "starlight_propose_voice_design",
@@ -41,6 +100,7 @@ export type AgentDriverToolName =
   | typeof AGENT_MEDIA_EXECUTION_TOOL_NAME
   | typeof AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME
   | typeof AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME
+  | typeof AGENT_MEDIA_SCHEMA_BINDING_TOOL_NAME
   | AgentMediaExecutionProposalToolName
   | AgentMediaToolName;
 
@@ -51,6 +111,23 @@ export interface AgentDriverToolDefinition {
     "text" | "image" | "media-video" | "media-voice-design" | "media-speech";
   readonly description: string;
   readonly inputSchema: JsonRecord;
+  readonly boundArguments?: JsonRecord;
+}
+
+export interface AgentMediaSchemaBinding {
+  readonly schemaVersion: typeof AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION;
+  readonly bindingId: string;
+  readonly kind: "video" | "talking-avatar";
+  readonly endpoints: readonly {
+    readonly endpointId: string;
+    readonly schemaFingerprint: string;
+  }[];
+  readonly toolDefinition: AgentDriverToolDefinition;
+  readonly continuationInstructions: string;
+  readonly expiresAt: number;
+  readonly nextEventSequence: number;
+  readonly operationCreated: false;
+  readonly providerDispatchStarted: false;
 }
 
 export type AgentDriverCapability =
@@ -391,26 +468,17 @@ export function isAgentDriverToolName(
     value === AGENT_MEDIA_EXECUTION_TOOL_NAME ||
     value === AGENT_MEDIA_MODEL_SEARCH_TOOL_NAME ||
     value === AGENT_MEDIA_MODEL_SCHEMA_TOOL_NAME ||
+    value === AGENT_MEDIA_SCHEMA_BINDING_TOOL_NAME ||
     isAgentMediaExecutionProposalToolName(value) ||
     isAgentMediaToolName(value)
   );
 }
 
-const proposalKindByToolName: Readonly<
-  Record<AgentMediaExecutionProposalToolName, string>
-> = {
-  starlight_propose_voice_design: "voice-design",
-  starlight_propose_adopted_speech: "adopted-speech",
-  starlight_propose_video: "video",
-  starlight_propose_talking_avatar: "talking-avatar",
-  starlight_propose_system_image: "system-image",
-};
-
-export function normalizeAgentMediaExecutionProposalArguments(
-  toolName: AgentMediaExecutionProposalToolName,
+export function applyAgentDriverBoundArguments(
+  definition: AgentDriverToolDefinition,
   value: JsonRecord,
 ): JsonRecord {
-  return Object.freeze({ ...value, kind: proposalKindByToolName[toolName] });
+  return Object.freeze({ ...value, ...(definition.boundArguments ?? {}) });
 }
 
 export function agentMediaToolOperationKind(input: {

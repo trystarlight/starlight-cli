@@ -56,6 +56,7 @@ const unexpected = files.filter(
   (file) =>
     file !== "package.json" &&
     !["README.md", "PROTOCOL.md", "SECURITY.md"].includes(file) &&
+    file !== "fixtures/media-tool-reattachment.v1.json" &&
     !file.startsWith("dist/"),
 );
 if (unexpected.length > 0) {

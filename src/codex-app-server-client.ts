@@ -57,11 +57,20 @@ export interface CodexTextInput {
   readonly executionProfile?: AgentExecutionProfile;
   readonly dynamicTools?: readonly AgentDriverToolDefinition[];
   readonly callbacks?: CodexTurnCallbacks;
+  readonly internalContinuation?: {
+    readonly bindingId: string;
+  };
   readonly messages: readonly {
     readonly role: "user" | "assistant";
     readonly text: string;
     readonly parts?: readonly CodexMessagePart[];
   }[];
+}
+
+export function codexInternalContinuationInput(
+  continuation: CodexTextInput["internalContinuation"],
+): readonly never[] | null {
+  return continuation === undefined ? null : [];
 }
 
 interface CodexInputAttachment {
@@ -1192,7 +1201,11 @@ export class CodexAppServerClient {
         "Starlight turn context must end with the current user message",
       );
     }
-    const currentInput = await this.materializeInput(current);
+    const internalContinuationInput = codexInternalContinuationInput(
+      input.internalContinuation,
+    );
+    const currentInput =
+      internalContinuationInput ?? (await this.materializeInput(current));
     let turnResult: JsonRecord;
     this.activeCapability = "text";
     this.turnStartCallbacks = input.callbacks ?? null;
@@ -1210,8 +1223,22 @@ export class CodexAppServerClient {
             },
             ...workingSetContext(input.workingSet),
             ...mediaExecutionContext(input.workingSet),
+            ...(input.internalContinuation === undefined
+              ? {}
+              : {
+                  starlightInternalContinuation: {
+                    kind: "untrusted" as const,
+                    value: JSON.stringify({
+                      bindingId: input.internalContinuation.bindingId,
+                      instruction:
+                        "Continue the current Starlight turn with the exact server-bound tool. This is not a new user message.",
+                    }),
+                  },
+                }),
           },
-          clientUserMessageId: input.clientUserMessageId ?? input.turnId,
+          ...(input.internalContinuation === undefined
+            ? { clientUserMessageId: input.clientUserMessageId ?? input.turnId }
+            : {}),
           approvalPolicy: "never",
           cwd: this.workspace,
           runtimeWorkspaceRoots: [this.workspace],

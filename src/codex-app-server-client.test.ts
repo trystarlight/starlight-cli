@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES,
   codexDynamicToolResult,
+  codexInternalContinuationInput,
 } from "./codex-app-server-client.js";
 
 describe("Codex dynamic tool result integrity", () => {
@@ -47,5 +48,16 @@ describe("Codex dynamic tool result integrity", () => {
       providerDispatchStarted: false,
     });
     expect(result.text).not.toContain("é");
+  });
+});
+
+describe("Codex internal continuation input", () => {
+  it("starts the rebound tool step without creating another user message", () => {
+    expect(
+      codexInternalContinuationInput({
+        bindingId: "binding_00000000-0000-4000-8000-000000000001",
+      }),
+    ).toEqual([]);
+    expect(codexInternalContinuationInput(undefined)).toBeNull();
   });
 });
