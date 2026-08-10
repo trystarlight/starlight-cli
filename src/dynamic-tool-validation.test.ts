@@ -9,32 +9,33 @@ import {
   type AgentDriverToolDefinition,
 } from "./protocol.js";
 
-const modelSelection = {
-  type: "object",
-  additionalProperties: false,
-  required: ["requested", "routeId", "catalogueVersion", "basis", "reason"],
-  properties: {
-    requested: { type: "string", minLength: 1, maxLength: 200 },
-    routeId: { type: "string", minLength: 1, maxLength: 200 },
-    catalogueVersion: { type: "string", minLength: 1, maxLength: 200 },
-    basis: {
-      type: "string",
-      enum: ["exact-route", "exact-variant", "family", "semantic"],
-    },
-    reason: { type: "string", minLength: 1, maxLength: 1_000 },
-  },
-} as const;
+const endpointId = "fixture/video-transformation";
+const schemaFingerprint = `sha256:${"d".repeat(64)}`;
 
-const videoTool = {
-  schemaVersion: "starlight.media-execution-intent.v2",
+const boundVideoTool = {
+  schemaVersion: "starlight.media-schema-binding.v1",
   name: "starlight_propose_video",
   capability: "text",
-  description: "Propose catalogue-grounded video work.",
+  description: "Submit one exact server-bound video proposal.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["outputCount", "variants"],
+    required: [
+      "schemaVersion",
+      "subject",
+      "references",
+      "derivation",
+      "outputCount",
+      "variants",
+    ],
     properties: {
+      schemaVersion: {
+        type: "string",
+        const: "starlight.media-execution-intent.v2",
+      },
+      subject: { type: "object" },
+      references: { type: "object" },
+      derivation: { type: "object" },
       outputCount: { type: "integer", minimum: 1, maximum: 16 },
       variants: {
         type: "array",
@@ -42,69 +43,91 @@ const videoTool = {
         maxItems: 16,
         uniqueItems: true,
         items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["mode", "modelSelection"],
-          properties: {
-            mode: {
-              type: "string",
-              enum: ["text-to-video", "image-to-video", "draft-enhance"],
-            },
-            prompt: { type: "string", minLength: 1, maxLength: 4_000 },
-            durationSeconds: { type: "integer", minimum: 1, maximum: 60 },
-            resolution: { type: "string", enum: ["720p", "1080p"] },
-            framing: {
-              oneOf: [
-                {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["kind"],
-                  properties: {
-                    kind: { type: "string", const: "provider-controlled" },
-                  },
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "endpointId",
+                "schemaFingerprint",
+                "providerInput",
+                "requestedModel",
+                "selectionReason",
+              ],
+              properties: {
+                endpointId: { type: "string", const: endpointId },
+                schemaFingerprint: {
+                  type: "string",
+                  const: schemaFingerprint,
                 },
-                {
+                providerInput: {
                   type: "object",
                   additionalProperties: false,
-                  required: ["kind", "aspectRatio"],
+                  required: ["source_url", "operation"],
                   properties: {
-                    kind: { type: "string", const: "aspect-ratio" },
-                    aspectRatio: {
+                    source_url: { type: "string", minLength: 1 },
+                    operation: {
                       type: "string",
-                      enum: ["auto", "16:9", "9:16"],
+                      enum: ["restyle", "repair"],
+                    },
+                    instruction: { type: "string", minLength: 1 },
+                    repair_region: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["x", "y", "width", "height"],
+                      properties: {
+                        x: { type: "number", minimum: 0, maximum: 1 },
+                        y: { type: "number", minimum: 0, maximum: 1 },
+                        width: { type: "number", minimum: 0, maximum: 1 },
+                        height: { type: "number", minimum: 0, maximum: 1 },
+                      },
                     },
                   },
+                  allOf: [
+                    {
+                      if: {
+                        required: ["operation"],
+                        properties: {
+                          operation: { type: "string", const: "repair" },
+                        },
+                      },
+                      then: { required: ["repair_region"] },
+                    },
+                  ],
                 },
-              ],
-            },
-            generateAudio: { type: "boolean" },
-            modelSelection,
-          },
-          allOf: [
-            {
-              if: {
-                required: ["mode"],
-                properties: {
-                  mode: { type: "string", const: "text-to-video" },
-                },
+                requestedModel: { type: "string", minLength: 1 },
+                selectionReason: { type: "string", minLength: 1 },
               },
-              then: { required: ["prompt"] },
-            },
-            {
-              if: {
-                required: ["mode"],
-                properties: {
-                  mode: { type: "string", const: "draft-enhance" },
-                },
-              },
-              then: { properties: { prompt: false } },
             },
           ],
         },
       },
     },
   },
+  boundArguments: {
+    kind: "video",
+    schemaBindingId: "binding_00000000-0000-4000-8000-000000000001",
+  },
 } as const satisfies AgentDriverToolDefinition;
+
+function proposal(providerInput: Readonly<Record<string, unknown>>) {
+  return {
+    schemaVersion: "starlight.media-execution-intent.v2",
+    subject: { kind: "none" },
+    references: { kind: "none" },
+    derivation: { kind: "new" },
+    outputCount: 1,
+    variants: [
+      {
+        endpointId,
+        schemaFingerprint,
+        providerInput,
+        requestedModel: "Selected live endpoint",
+        selectionReason: "The exact retrieved schema matches this request.",
+      },
+    ],
+  };
+}
 
 const voiceTool = {
   schemaVersion: "starlight.media-execution-intent.v2",
@@ -130,81 +153,42 @@ const voiceTool = {
 } as const satisfies AgentDriverToolDefinition;
 
 describe("server-supplied dynamic tool validation", () => {
-  it("accepts exact multi-model output selections without literal-name routing", () => {
-    const result = validateDynamicToolArguments(videoTool, {
-      outputCount: 2,
-      variants: [
-        {
-          mode: "image-to-video",
-          prompt: "A restrained handheld orbit.",
-          durationSeconds: 5,
-          framing: { kind: "provider-controlled" },
-          generateAudio: false,
-          modelSelection: {
-            requested: "Kling 3",
-            routeId: "kling-v3-standard-image-to-video",
-            catalogueVersion: "starlight.video-routes.v1",
-            basis: "family",
-            reason: "The family resolves to one compatible admitted route.",
-          },
-        },
-        {
-          mode: "text-to-video",
-          prompt: "A quiet dawn over still water.",
-          resolution: "1080p",
-          modelSelection: {
-            requested: "cinematic model",
-            routeId: "cinematic-text-to-video",
-            catalogueVersion: "starlight.video-routes.v1",
-            basis: "semantic",
-            reason: "The route matches the requested cinematic direction.",
-          },
-        },
-      ],
-    });
-
-    expect(result.valid).toBe(true);
+  it("accepts the exact live provider input without interpreting its semantics", () => {
+    expect(
+      validateDynamicToolArguments(
+        boundVideoTool,
+        proposal({
+          source_url: "starlight://artifact/artifact_source",
+          operation: "restyle",
+          instruction: "Use a restrained material treatment.",
+        }),
+      ),
+    ).toMatchObject({ valid: true });
   });
 
-  it("preserves route-specific optional framing and conditional fields", () => {
+  it("preserves nested and conditional fields from the supplied live schema", () => {
     expect(
-      validateDynamicToolArguments(videoTool, {
-        outputCount: 1,
-        variants: [
-          {
-            mode: "draft-enhance",
-            modelSelection: {
-              requested: "enhance this draft",
-              routeId: "draft-enhance-1080p",
-              catalogueVersion: "starlight.video-routes.v1",
-              basis: "exact-route",
-              reason: "The artifact is eligible for the enhancement workflow.",
-            },
-          },
-        ],
-      }),
+      validateDynamicToolArguments(
+        boundVideoTool,
+        proposal({
+          source_url: "starlight://artifact/artifact_source",
+          operation: "repair",
+          repair_region: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+        }),
+      ),
     ).toMatchObject({ valid: true });
 
     expect(
-      validateDynamicToolArguments(videoTool, {
-        outputCount: 1,
-        variants: [
-          {
-            mode: "draft-enhance",
-            prompt: "Replace the source intent.",
-            modelSelection: {
-              requested: "enhance this draft",
-              routeId: "draft-enhance-1080p",
-              catalogueVersion: "starlight.video-routes.v1",
-              basis: "exact-route",
-              reason: "The artifact is eligible for the enhancement workflow.",
-            },
-          },
-        ],
-      }),
+      validateDynamicToolArguments(
+        boundVideoTool,
+        proposal({
+          source_url: "starlight://artifact/artifact_source",
+          operation: "repair",
+        }),
+      ),
     ).toMatchObject({
       valid: false,
-      failure: { field: "variants.0.prompt" },
+      failure: { field: "variants.0.providerInput.repair_region" },
     });
   });
 
@@ -267,6 +251,7 @@ describe("current media tool identities", () => {
     "starlight_create_adopted_speech",
     "starlight_create_video",
     "starlight_create_talking_avatar",
+    "starlight_prepare_media_schema_binding",
     "starlight_propose_voice_design",
     "starlight_propose_video",
   ])("accepts %s", (name) => {
