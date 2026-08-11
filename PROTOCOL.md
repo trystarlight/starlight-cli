@@ -4,7 +4,7 @@ The CLI and Starlight service negotiate a narrow driver protocol independently o
 
 The initial declaration is:
 
-- CLI: `0.1.x`
+- CLI: `0.8.x`
 - Driver protocol: `1.0.0`
 - Instructions schema: `starlight.agent-driver-instructions.v1`
 - Behavior profile: `starlight.creative-driver-behavior-profile.v2`
