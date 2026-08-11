@@ -28,8 +28,8 @@ describe("bounded driver update check", () => {
     const fetcher = vi.fn(async () =>
       Response.json({
         schemaVersion: "starlight.driver-update.v1",
-        latestVersion: "0.2.0",
-        minimumVersion: "0.1.0",
+        latestVersion: "0.9.0",
+        minimumVersion: "0.7.0",
       }),
     );
 
@@ -41,9 +41,9 @@ describe("bounded driver update check", () => {
         endpoint: "https://app.trystarlight.io/.well-known/starlight-driver",
       }),
     ).resolves.toEqual({
-      installedVersion: "0.1.0",
-      latestVersion: "0.2.0",
-      minimumVersion: "0.1.0",
+      installedVersion: "0.8.0",
+      latestVersion: "0.9.0",
+      minimumVersion: "0.7.0",
       updateAvailable: true,
       compatible: true,
       source: "network",
@@ -52,8 +52,8 @@ describe("bounded driver update check", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
       schemaVersion: "starlight.driver-update-cache.v1",
       checkedAt: 5_000,
-      latestVersion: "0.2.0",
-      minimumVersion: "0.1.0",
+      latestVersion: "0.9.0",
+      minimumVersion: "0.7.0",
     });
   });
 
@@ -64,8 +64,8 @@ describe("bounded driver update check", () => {
       JSON.stringify({
         schemaVersion: "starlight.driver-update-cache.v1",
         checkedAt: 10_000,
-        latestVersion: "0.1.0",
-        minimumVersion: "0.1.0",
+        latestVersion: "0.8.0",
+        minimumVersion: "0.7.0",
       }),
       "utf8",
     );
@@ -99,7 +99,7 @@ describe("bounded driver update check", () => {
         timeoutMs: 10,
       }),
     ).resolves.toEqual({
-      installedVersion: "0.1.0",
+      installedVersion: "0.8.0",
       latestVersion: null,
       minimumVersion: null,
       updateAvailable: null,
