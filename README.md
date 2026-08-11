@@ -2,8 +2,6 @@
 
 The Starlight CLI connects your own Codex installation on macOS to your Starlight workspace. It stores the resource-bound pairing credential in macOS Keychain and can keep the driver available through a per-user LaunchAgent.
 
-This package is under active development and is not yet published to npm.
-
 ## Requirements
 
 - macOS
@@ -14,8 +12,6 @@ This package is under active development and is not yet published to npm.
 Linux and Windows are not supported in the initial release. Mutating commands fail explicitly on unsupported operating systems.
 
 ## Install and connect
-
-Once the first release is available:
 
 ```sh
 npm install --global @trystarlight/cli
