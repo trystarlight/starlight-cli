@@ -140,9 +140,41 @@ export function createProgram(overrides: Partial<ProgramDependencies> = {}) {
     );
   auth
     .command("logout")
-    .action(async () =>
-      dependencies.writeOut(json(await dependencies.auth.logout())),
-    );
+    .description("Revoke the remote credential, then clear local pairing.")
+    .option(
+      "--local-only",
+      "RECOVERY ONLY: skip remote revocation and clear only this CLI's local Keychain pairing state",
+      false,
+    )
+    .option("--json", "Print stable JSON", false)
+    .action(async (options: { localOnly: boolean; json: boolean }) => {
+      if (!options.localOnly) {
+        dependencies.writeOut(json(await dependencies.auth.logout()));
+        return;
+      }
+      try {
+        const result = await dependencies.auth.clearLocalCredentials();
+        dependencies.writeOut(
+          options.json ? json(result) : `${result.note}\n${result.warning}\n`,
+        );
+      } catch (error) {
+        if (!options.json) throw error;
+        dependencies.writeOut(
+          json({
+            schemaVersion: "starlight.agent-auth.v1",
+            status: "failed",
+            remoteRevocation: "skipped",
+            localCredentialsCleared: false,
+            error: {
+              code: "LOCAL_CREDENTIAL_CLEAR_FAILED",
+              message:
+                "Starlight could not clear local agent credentials; local recovery did not complete.",
+            },
+          }),
+        );
+        dependencies.setExitCode(CLI_EXIT.failed);
+      }
+    });
 
   const driver = program
     .command("driver")

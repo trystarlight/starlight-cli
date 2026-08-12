@@ -216,10 +216,16 @@ describe("agent bridge client", () => {
     });
     const fetcher = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) => {
+        expect(memory.store.clear).not.toHaveBeenCalled();
         expect(new Headers(init?.headers).get("x-starlight-resource")).toBe(
           "https://app.example.com/mcp",
         );
-        return new Response(JSON.stringify({ status: "revoked" }));
+        return new Response(
+          JSON.stringify({
+            schemaVersion: "starlight.agent-auth.v1",
+            status: "revoked",
+          }),
+        );
       },
     );
     const client = new AgentBridgeClient({
@@ -234,5 +240,188 @@ describe("agent bridge client", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(memory.state()).toBeNull();
+    expect(memory.store.clear).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      "an explicit remote rejection",
+      () => Promise.resolve(new Response("rejected", { status: 401 })),
+    ],
+    [
+      "an ambiguous network failure",
+      () => Promise.reject(new TypeError("connection closed")),
+    ],
+    [
+      "an ambiguous successful response",
+      () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              schemaVersion: "starlight.agent-auth.v1",
+              status: "pending",
+            }),
+          ),
+        ),
+    ],
+  ])("preserves exact local state after %s", async (_label, revoke) => {
+    const initial: StoredAgentBridgeState = {
+      schemaVersion: "starlight.agent-credential-store.v1",
+      apiUrl: "https://foreign-api.example.com",
+      webUrl: "https://foreign.example.com",
+      credential: {
+        credentialId: "agent_credential_foreign",
+        token: "stl_agent_foreign-token",
+        expiresAt: 2_000,
+        scopes: ["character:read"],
+      },
+    };
+    const memory = memoryStore(initial);
+    const fetcher = vi.fn(revoke);
+    const client = new AgentBridgeClient({
+      store: memory.store,
+      fetch: fetcher as typeof fetch,
+      now: () => 1_000,
+    });
+
+    await expect(client.logout()).rejects.toThrow(
+      "could not confirm remote credential revocation; local access was preserved",
+    );
+    expect(memory.state()).toEqual(initial);
+    expect(memory.store.clear).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a stored credential",
+      {
+        schemaVersion: "starlight.agent-credential-store.v1" as const,
+        apiUrl: "https://foreign-api.example.com",
+        webUrl: "https://foreign.example.com",
+        credential: {
+          credentialId: "agent_credential_foreign",
+          token: "stl_agent_foreign-token",
+          expiresAt: 2_000,
+          scopes: ["character:read" as const],
+        },
+      },
+    ],
+    [
+      "pending pairing state",
+      {
+        schemaVersion: "starlight.agent-credential-store.v1" as const,
+        apiUrl: "https://foreign-api.example.com",
+        webUrl: "https://foreign.example.com",
+        pending: {
+          requestId: "agent_connect_foreign",
+          requestSecret: "stl_connect_foreign",
+          credentialToken: "stl_agent_pending-foreign",
+          expiresAt: 2_000,
+        },
+      },
+    ],
+  ])(
+    "clears %s locally once without reading or using the network",
+    async (_label, initial) => {
+      const memory = memoryStore(initial);
+      const fetcher = vi.fn();
+      const client = new AgentBridgeClient({
+        store: memory.store,
+        fetch: fetcher as typeof fetch,
+        now: () => 1_000,
+      });
+
+      await expect(client.clearLocalCredentials()).resolves.toEqual({
+        schemaVersion: "starlight.agent-auth.v1",
+        status: "succeeded",
+        connected: false,
+        remoteRevocation: "skipped",
+        localCredentialsCleared: true,
+        note: "Local Starlight agent credentials and pending pairing state were cleared.",
+        warning:
+          "Remote revocation was skipped. A still-valid remote credential may remain active until revoked or expired.",
+      });
+      expect(memory.store.read).not.toHaveBeenCalled();
+      expect(memory.store.clear).toHaveBeenCalledOnce();
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(memory.state()).toBeNull();
+    },
+  );
+
+  it("leaves status disconnected and permits a fresh pair request after explicit local recovery", async () => {
+    const memory = memoryStore({
+      schemaVersion: "starlight.agent-credential-store.v1",
+      apiUrl: "http://127.0.0.1:4100",
+      webUrl: "http://127.0.0.1:4100",
+      credential: {
+        credentialId: "agent_credential_stale-workspace",
+        token: "stl_agent_stale-workspace",
+        expiresAt: 2_000,
+        scopes: ["character:read"],
+      },
+    });
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            requestId: "agent_connect_fresh-workspace",
+            expiresAt: 3_000,
+            verificationPath:
+              "/agent/connect?request=agent_connect_fresh-workspace",
+          }),
+          { status: 201 },
+        ),
+    );
+    const client = new AgentBridgeClient({
+      store: memory.store,
+      fetch: fetcher as typeof fetch,
+      now: () => 1_000,
+      randomBytes: () => Buffer.alloc(32, 1),
+    });
+
+    await client.clearLocalCredentials();
+    expect(fetcher).not.toHaveBeenCalled();
+    await expect(client.status()).resolves.toEqual({
+      schemaVersion: "starlight.agent-auth.v1",
+      status: "succeeded",
+      connected: false,
+    });
+    await expect(
+      client.startLogin({
+        apiUrl: "http://127.0.0.1:4200",
+        webUrl: "http://127.0.0.1:4200",
+        clientLabel: "Codex after local recovery",
+      }),
+    ).resolves.toMatchObject({
+      status: "awaiting-approval",
+      requestId: "agent_connect_fresh-workspace",
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(memory.state()?.pending?.requestId).toBe(
+      "agent_connect_fresh-workspace",
+    );
+  });
+
+  it("reports exact local clearing failure without false success or network access", async () => {
+    const store: AgentCredentialStore = {
+      read: vi.fn(),
+      write: vi.fn(),
+      clear: vi.fn(async () => {
+        throw new Error("Keychain denied the exact item deletion");
+      }),
+    };
+    const fetcher = vi.fn();
+    const client = new AgentBridgeClient({
+      store,
+      fetch: fetcher as typeof fetch,
+    });
+
+    await expect(client.clearLocalCredentials()).rejects.toThrow(
+      "local recovery did not complete",
+    );
+    expect(store.clear).toHaveBeenCalledOnce();
+    expect(store.read).not.toHaveBeenCalled();
+    expect(store.write).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
