@@ -6,6 +6,8 @@ import {
 } from "./dynamic-tool-validation.js";
 import {
   isAgentDriverToolName,
+  isAgentMediaExecutionProposalToolName,
+  isAgentMediaToolName,
   type AgentDriverToolDefinition,
 } from "./protocol.js";
 
@@ -267,17 +269,26 @@ describe("current media tool identities", () => {
     "starlight_create_adopted_speech",
     "starlight_create_video",
     "starlight_create_talking_avatar",
+    "starlight_create_image",
     "starlight_propose_voice_design",
     "starlight_propose_video",
+    "starlight_propose_image",
   ])("accepts %s", (name) => {
     expect(isAgentDriverToolName(name)).toBe(true);
   });
 
   it.each([
-    "starlight_create_image",
+    "starlight_execute_image",
     "starlight_design_voice",
     "starlight_create_speech",
   ])("rejects obsolete identity %s", (name) => {
     expect(isAgentDriverToolName(name)).toBe(false);
+  });
+
+  it("routes image identities through the existing generic proposal and media transports", () => {
+    expect(
+      isAgentMediaExecutionProposalToolName("starlight_propose_image"),
+    ).toBe(true);
+    expect(isAgentMediaToolName("starlight_create_image")).toBe(true);
   });
 });

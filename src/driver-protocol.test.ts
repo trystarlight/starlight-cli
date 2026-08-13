@@ -67,6 +67,20 @@ describe("driver protocol negotiation", () => {
     });
   });
 
+  it.each(["starlight_create_image", "starlight_propose_image"])(
+    "accepts the current platform image tool %s",
+    (toolName) => {
+      expect(() =>
+        parseAgentDriverSessionContext(
+          context({
+            driverProtocolVersion: "1.0.0",
+            driverInstructions: currentInstructions(toolName),
+          }),
+        ),
+      ).not.toThrow();
+    },
+  );
+
   it("keeps the explicitly supported legacy response parseable", () => {
     expect(parseAgentDriverSessionContext(context())).not.toHaveProperty(
       "driverInstructions",

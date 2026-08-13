@@ -316,7 +316,7 @@ export function parseAgentMediaSchemaBinding(
   if (
     source["schemaVersion"] !== AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION ||
     !/^binding_[0-9a-f-]{36}$/u.test(bindingId) ||
-    (kind !== "video" && kind !== "talking-avatar") ||
+    (kind !== "image" && kind !== "video" && kind !== "talking-avatar") ||
     !Array.isArray(endpointValues) ||
     endpointValues.length < 1 ||
     endpointValues.length > 16 ||
@@ -1946,6 +1946,7 @@ export class AgentDriverApiClient {
     readonly leaseId: string;
     readonly fencingToken: number;
     readonly query: string;
+    readonly limit?: number;
   }): Promise<JsonRecord> {
     return await this.request("/agent/v1/turns/tools/media/search", {
       method: "POST",

@@ -976,6 +976,9 @@ export class AgentDriverRuntime {
                 leaseId: claim.lease.leaseId,
                 fencingToken: claim.lease.fencingToken,
                 query: String(input.arguments["query"] ?? ""),
+                ...(typeof input.arguments["limit"] === "number"
+                  ? { limit: input.arguments["limit"] }
+                  : {}),
               });
               return { success: true, text: JSON.stringify(result) };
             }
