@@ -703,6 +703,72 @@ function capableTurnSummary(turn: JsonRecord, allowDynamicTools = false) {
   return { response, imageItems };
 }
 
+function terminalImageItems(items: readonly JsonRecord[]) {
+  return items.filter(
+    (item) =>
+      item["type"] === "imageGeneration" &&
+      typeof item["id"] === "string" &&
+      (item["status"] === "completed" || item["status"] === "failed"),
+  );
+}
+
+export function reconcileImageTurnHistory(input: {
+  readonly completed: JsonRecord;
+  readonly threadRead: unknown;
+  readonly turnId: string;
+  readonly startedItemIds: readonly string[];
+}) {
+  const expected = new Set(input.startedItemIds);
+  if (expected.size === 0 || expected.size !== input.startedItemIds.length) {
+    return input.completed;
+  }
+  const currentItems = Array.isArray(input.completed["items"])
+    ? input.completed["items"].filter(isRecord)
+    : [];
+  const currentTerminalIds = new Set(
+    terminalImageItems(currentItems).map((item) => item["id"] as string),
+  );
+  if ([...expected].every((itemId) => currentTerminalIds.has(itemId))) {
+    return input.completed;
+  }
+  if (!isRecord(input.threadRead) || !isRecord(input.threadRead["thread"])) {
+    return input.completed;
+  }
+  const turns = input.threadRead["thread"]["turns"];
+  if (!Array.isArray(turns)) return input.completed;
+  const historyTurn = turns.find(
+    (turn) => isRecord(turn) && turn["id"] === input.turnId,
+  );
+  if (
+    !isRecord(historyTurn) ||
+    historyTurn["status"] !== "completed" ||
+    !Array.isArray(historyTurn["items"])
+  ) {
+    return input.completed;
+  }
+  const recovered = new Map<string, JsonRecord>();
+  for (const item of terminalImageItems(
+    historyTurn["items"].filter(isRecord),
+  )) {
+    const itemId = item["id"] as string;
+    if (!expected.has(itemId) || recovered.has(itemId)) continue;
+    recovered.set(itemId, item);
+  }
+  if ([...expected].some((itemId) => !recovered.has(itemId))) {
+    return input.completed;
+  }
+  const merged = currentItems.filter(
+    (item) =>
+      item["type"] !== "imageGeneration" ||
+      typeof item["id"] !== "string" ||
+      !expected.has(item["id"]),
+  );
+  for (const itemId of input.startedItemIds) {
+    merged.push(recovered.get(itemId) as JsonRecord);
+  }
+  return { ...input.completed, items: merged };
+}
+
 export class CodexAppServerClient {
   private readonly environment: NodeJS.ProcessEnv;
   private readonly inspectRuntime: NonNullable<
@@ -730,6 +796,7 @@ export class CodexAppServerClient {
   private readonly completedItems = new Map<string, JsonRecord[]>();
   private readonly imageGenerationStarts = new Map<string, number>();
   private readonly imageGenerationAttempts = new Map<string, number>();
+  private readonly completedImageTerminalItems = new Set<string>();
   private readonly completedImageResults = new Map<string, CodexImageResult>();
   private readonly sessionThreads = new Map<string, string>();
   private readonly turnCallbacks = new Map<string, CodexTurnCallbacks>();
@@ -1582,7 +1649,12 @@ export class CodexAppServerClient {
     this.turnStartDynamicTools = null;
     try {
       this.throwIfSecurityViolation();
-      const completed = await this.waitForTurn(turnId);
+      const notifiedTurn = await this.waitForTurn(turnId);
+      const completed = await this.reconcileCompletedImageTurn(
+        threadId,
+        turnId,
+        notifiedTurn,
+      );
       await this.drainTurnCallbacks(turnId);
       this.throwIfSecurityViolation();
       const summary = capableTurnSummary(completed, dynamicTools.length > 0);
@@ -1668,6 +1740,15 @@ export class CodexAppServerClient {
       }
       this.turnErrors.delete(turnId);
       this.turnModeration.delete(turnId);
+      this.imageGenerationStarts.delete(turnId);
+      for (const key of this.imageGenerationAttempts.keys()) {
+        if (key.startsWith(`${turnId}:`))
+          this.imageGenerationAttempts.delete(key);
+      }
+      for (const key of this.completedImageTerminalItems) {
+        if (key.startsWith(`${turnId}:`))
+          this.completedImageTerminalItems.delete(key);
+      }
       for (const key of this.completedImageResults.keys()) {
         if (key.startsWith(`${turnId}:`))
           this.completedImageResults.delete(key);
@@ -1787,6 +1868,94 @@ export class CodexAppServerClient {
       }
     });
     this.turnCallbackTasks.set(turnId, next);
+  }
+
+  private startedImageItemIds(turnId: string) {
+    const prefix = `${turnId}:`;
+    return [...this.imageGenerationAttempts.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .sort((left, right) => left[1] - right[1])
+      .map(([key]) => key.slice(prefix.length));
+  }
+
+  private queueCompletedImageItem(turnId: string, item: JsonRecord) {
+    const itemId = text(item["id"], "Codex image item ID");
+    const key = `${turnId}:${itemId}`;
+    if (this.completedImageTerminalItems.has(key)) return;
+    this.completedImageTerminalItems.add(key);
+    const attempt =
+      this.imageGenerationAttempts.get(key) ??
+      this.imageGenerationStarts.get(turnId) ??
+      1;
+    const callback = (this.turnCallbacks.get(turnId) ?? this.turnStartCallbacks)
+      ?.onImageGenerationCompleted;
+    if (callback === undefined) return;
+    const status =
+      typeof item["status"] === "string" && item["status"].length > 0
+        ? item["status"]
+        : "unknown";
+    this.queueTurnCallback(turnId, async () => {
+      const installedVersion = this.installation?.installedVersion;
+      const image =
+        status === "completed" && installedVersion !== undefined
+          ? await this.readImageItem(item, installedVersion)
+          : null;
+      if (image !== null) this.completedImageResults.set(key, image);
+      await callback({ itemId, attempt, status, image });
+    });
+  }
+
+  private async reconcileCompletedImageTurn(
+    threadId: string,
+    turnId: string,
+    completed: JsonRecord,
+  ) {
+    const startedCount =
+      typeof completed["starlightImageGenerationStartCount"] === "number"
+        ? completed["starlightImageGenerationStartCount"]
+        : 0;
+    const startedItemIds = this.startedImageItemIds(turnId);
+    if (startedCount === 0 || startedItemIds.length !== startedCount) {
+      return completed;
+    }
+    const currentItems = Array.isArray(completed["items"])
+      ? completed["items"].filter(isRecord)
+      : [];
+    const currentTerminalIds = new Set(
+      terminalImageItems(currentItems).map((item) => item["id"] as string),
+    );
+    for (const item of terminalImageItems(currentItems)) {
+      if (startedItemIds.includes(item["id"] as string)) {
+        this.queueCompletedImageItem(turnId, item);
+      }
+    }
+    if (startedItemIds.every((itemId) => currentTerminalIds.has(itemId))) {
+      return completed;
+    }
+    let threadRead: unknown;
+    try {
+      threadRead = await this.request("thread/read", {
+        threadId,
+        includeTurns: true,
+      });
+    } catch {
+      return completed;
+    }
+    const reconciled = reconcileImageTurnHistory({
+      completed,
+      threadRead,
+      turnId,
+      startedItemIds,
+    });
+    const reconciledItems = Array.isArray(reconciled["items"])
+      ? reconciled["items"].filter(isRecord)
+      : [];
+    for (const item of terminalImageItems(reconciledItems)) {
+      if (startedItemIds.includes(item["id"] as string)) {
+        this.queueCompletedImageItem(turnId, item);
+      }
+    }
+    return reconciled;
   }
 
   private async drainTurnCallbacks(turnId: string) {
@@ -2234,11 +2403,6 @@ export class CodexAppServerClient {
       this.completedItems.delete(turnId);
       const imageGenerationStartCount =
         this.imageGenerationStarts.get(turnId) ?? 0;
-      this.imageGenerationStarts.delete(turnId);
-      for (const key of this.imageGenerationAttempts.keys()) {
-        if (key.startsWith(`${turnId}:`))
-          this.imageGenerationAttempts.delete(key);
-      }
       const terminalTurn: JsonRecord =
         completedItems === undefined ||
         (Array.isArray(turn["items"]) && turn["items"].length > 0)
@@ -2365,31 +2529,7 @@ export class CodexAppServerClient {
         typeof item?.["id"] === "string"
       ) {
         this.refreshTurnTimeout(turnId);
-        const itemId = item["id"];
-        const attempt =
-          this.imageGenerationAttempts.get(`${turnId}:${itemId}`) ??
-          this.imageGenerationStarts.get(turnId) ??
-          1;
-        const callback = (
-          this.turnCallbacks.get(turnId) ?? this.turnStartCallbacks
-        )?.onImageGenerationCompleted;
-        if (callback !== undefined) {
-          const status =
-            typeof item["status"] === "string" && item["status"].length > 0
-              ? item["status"]
-              : "unknown";
-          this.queueTurnCallback(turnId, async () => {
-            const installedVersion = this.installation?.installedVersion;
-            const image =
-              status === "completed" && installedVersion !== undefined
-                ? await this.readImageItem(item, installedVersion)
-                : null;
-            if (image !== null) {
-              this.completedImageResults.set(`${turnId}:${itemId}`, image);
-            }
-            await callback({ itemId, attempt, status, image });
-          });
-        }
+        this.queueCompletedImageItem(turnId, item);
       }
       if (
         method === "item/completed" &&
@@ -2470,6 +2610,7 @@ export class CodexAppServerClient {
     this.completedItems.clear();
     this.imageGenerationStarts.clear();
     this.imageGenerationAttempts.clear();
+    this.completedImageTerminalItems.clear();
     this.completedImageResults.clear();
     this.turnCallbacks.clear();
     this.turnDynamicToolNames.clear();
