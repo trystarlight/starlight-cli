@@ -4,6 +4,7 @@ import {
   AGENT_DRIVER_DEFAULT_MAXIMUM_JSON_RESPONSE_BYTES,
   AGENT_DRIVER_MEDIA_DISCOVERY_MAXIMUM_JSON_RESPONSE_BYTES,
   AgentDriverApiClient,
+  parseAgentMediaSchemaBinding,
 } from "./driver-api-client.js";
 import type {
   AgentCredentialStore,
@@ -94,6 +95,65 @@ const mutationInput = {
 };
 
 describe("public driver media transport", () => {
+  it("forwards the validated media catalogue result limit exactly", async () => {
+    const fetcher = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          leaseId: "lease_test",
+          fencingToken: 7,
+          query: "video",
+          limit: 32,
+        });
+        return Response.json({
+          schemaVersion: "starlight.agent-media-model-search.v1",
+          source: "fal-model-search",
+          retrievedAt: 10_000,
+          query: "video",
+          matchedCount: 32,
+          returnedCount: 32,
+          limit: 32,
+          models: [],
+          operationCreated: false,
+          providerDispatchStarted: false,
+        });
+      },
+    );
+
+    await expect(
+      client(fetcher as typeof fetch).searchMediaModels({
+        leaseId: "lease_test",
+        fencingToken: 7,
+        query: "video",
+        limit: 32,
+      }),
+    ).resolves.toMatchObject({ limit: 32 });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("accepts an exact image schema binding without weakening its closed identity", () => {
+    expect(
+      parseAgentMediaSchemaBinding({
+        schemaVersion: "starlight.media-schema-binding.v2",
+        bindingId: "binding_00000000-0000-4000-8000-000000000018",
+        kind: "image",
+        endpoints: [
+          {
+            endpointId: "bytedance/seedream/v5/lite/text-to-image",
+            schemaFingerprint: `sha256:${"a".repeat(64)}`,
+          },
+        ],
+        proposalContract: {
+          schemaVersion: "starlight.media-execution-intent.v2",
+          toolName: "starlight_propose_media_execution",
+        },
+        expiresAt: 20_000,
+        nextEventSequence: 4,
+        operationCreated: false,
+        providerDispatchStarted: false,
+      }),
+    ).toMatchObject({ kind: "image" });
+  });
+
   it("forwards arbitrary RFC 6901 navigation and Unicode scalar cursors exactly", async () => {
     const scalarText = "😀/tilde~ café 東京";
     const nextCursor = 32 + Array.from(scalarText).length;

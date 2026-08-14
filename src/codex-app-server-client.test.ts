@@ -5,6 +5,7 @@ import {
   CODEX_DYNAMIC_TOOL_RESULT_MAXIMUM_BYTES,
   codexDynamicToolArgumentsFailure,
   codexDynamicToolResult,
+  reconcileImageTurnHistory,
 } from "./codex-app-server-client.js";
 
 describe("Codex dynamic tool transport integrity", () => {
@@ -72,5 +73,92 @@ describe("Codex dynamic tool transport integrity", () => {
       operationCreated: false,
       providerDispatchStarted: false,
     });
+  });
+});
+
+describe("Codex image turn reconciliation", () => {
+  const completed = {
+    id: "turn-1",
+    status: "completed",
+    items: [
+      {
+        type: "agentMessage",
+        id: "message-1",
+        phase: "final_answer",
+        text: "",
+      },
+    ],
+    starlightImageGenerationStartCount: 1,
+  } as const;
+
+  it("recovers an exact terminal image item from completed thread history", () => {
+    const reconciled = reconcileImageTurnHistory({
+      completed,
+      turnId: "turn-1",
+      startedItemIds: ["image-1"],
+      threadRead: {
+        thread: {
+          turns: [
+            {
+              id: "turn-1",
+              status: "completed",
+              items: [
+                {
+                  type: "imageGeneration",
+                  id: "image-1",
+                  status: "completed",
+                  revisedPrompt: "a red star",
+                  result: "",
+                  savedPath: "/codex-home/generated_images/run/image.png",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(reconciled.items).toEqual([
+      completed.items[0],
+      expect.objectContaining({
+        type: "imageGeneration",
+        id: "image-1",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  it("does not resolve a started attempt from a different or nonterminal item", () => {
+    const reconciled = reconcileImageTurnHistory({
+      completed,
+      turnId: "turn-1",
+      startedItemIds: ["image-1"],
+      threadRead: {
+        thread: {
+          turns: [
+            {
+              id: "turn-1",
+              status: "completed",
+              items: [
+                {
+                  type: "imageGeneration",
+                  id: "image-2",
+                  status: "completed",
+                  result: "definitive but unrelated",
+                },
+                {
+                  type: "imageGeneration",
+                  id: "image-1",
+                  status: "inProgress",
+                  result: "",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(reconciled).toBe(completed);
   });
 });

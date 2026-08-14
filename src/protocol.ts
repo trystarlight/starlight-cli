@@ -168,6 +168,7 @@ export const AGENT_MEDIA_EXECUTION_PROPOSAL_TOOL_NAMES = [
   "starlight_propose_video",
   "starlight_propose_talking_avatar",
   "starlight_propose_system_image",
+  "starlight_propose_image",
 ] as const;
 
 export const AGENT_CHARACTER_TOOL_NAMES = [
@@ -180,6 +181,7 @@ export type AgentCharacterToolName =
 export type AgentMediaExecutionProposalToolName =
   (typeof AGENT_MEDIA_EXECUTION_PROPOSAL_TOOL_NAMES)[number];
 export type AgentMediaToolName =
+  | "starlight_create_image"
   | "starlight_create_video"
   | "starlight_design_character_voice"
   | "starlight_create_adopted_speech"
@@ -207,7 +209,7 @@ export interface AgentDriverToolDefinition {
 export interface AgentMediaSchemaBinding {
   readonly schemaVersion: typeof AGENT_MEDIA_SCHEMA_BINDING_SCHEMA_VERSION;
   readonly bindingId: string;
-  readonly kind: "video" | "talking-avatar";
+  readonly kind: "image" | "video" | "talking-avatar";
   readonly endpoints: readonly {
     readonly endpointId: string;
     readonly schemaFingerprint: string;
@@ -539,6 +541,7 @@ export function isAgentMediaExecutionProposalToolName(
 }
 
 const mediaToolNames: readonly AgentMediaToolName[] = [
+  "starlight_create_image",
   "starlight_create_video",
   "starlight_design_character_voice",
   "starlight_create_adopted_speech",

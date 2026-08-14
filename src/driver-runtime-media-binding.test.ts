@@ -70,6 +70,22 @@ const schemaTool: AgentDriverToolDefinition = {
   },
 };
 
+const searchTool: AgentDriverToolDefinition = {
+  schemaVersion: "starlight.agent-media-discovery.v1",
+  name: "starlight_search_media_models",
+  capability: "text",
+  description: "Search the live admitted media catalogue.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"],
+    properties: {
+      query: { type: "string", minLength: 1 },
+      limit: { type: "integer", minimum: 1, maximum: 32 },
+    },
+  },
+};
+
 describe("same-turn stable media proposal", () => {
   it("navigates, binds, and proposes through one Codex turn", async () => {
     const controller = new AbortController();
@@ -220,7 +236,7 @@ describe("same-turn stable media proposal", () => {
         driverInstructions: {
           schemaVersion: "starlight.agent-driver-instructions.v1" as const,
           text: "Use only authenticated Starlight tools.",
-          tools: [schemaTool, bindingTool, stableProposalTool],
+          tools: [searchTool, schemaTool, bindingTool, stableProposalTool],
         },
         workingSet,
         session: { sessionId: "session_test", title: "Media session" },
@@ -234,6 +250,18 @@ describe("same-turn stable media proposal", () => {
           requiredInputCapabilities: [],
         },
       }),
+      searchMediaModels: vi.fn(async () => ({
+        schemaVersion: "starlight.agent-media-model-search.v1",
+        source: "fal-model-search",
+        retrievedAt: 10_000,
+        query: "video",
+        matchedCount: 0,
+        returnedCount: 0,
+        limit: 32,
+        models: [],
+        operationCreated: false,
+        providerDispatchStarted: false,
+      })),
       prepareMediaSchemaBinding: async () => ({
         schemaVersion: "starlight.media-schema-binding.v2" as const,
         bindingId,
@@ -320,6 +348,20 @@ describe("same-turn stable media proposal", () => {
         generateInputs.push(input);
         const callback = input.callbacks?.onDynamicToolCall;
         if (callback === undefined) throw new Error("Tool callback is missing");
+        const search = await callback({
+          toolName: "starlight_search_media_models",
+          callId: "call_search",
+          arguments: { query: "video", limit: 32 },
+          threadId: "thread_test",
+          turnId: "codex_turn_a",
+        });
+        expect(search).toMatchObject({ success: true });
+        expect(api.searchMediaModels).toHaveBeenCalledWith({
+          leaseId: claim.lease.leaseId,
+          fencingToken: claim.lease.fencingToken,
+          query: "video",
+          limit: 32,
+        });
         const schema = await callback({
           toolName: "starlight_get_media_model_schema",
           callId: "call_schema",
@@ -399,6 +441,7 @@ describe("same-turn stable media proposal", () => {
     expect(generateInputs[0]?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "starlight_get_media_model_schema" }),
+        expect.objectContaining({ name: "starlight_search_media_models" }),
         expect.objectContaining({
           name: "starlight_prepare_media_schema_binding",
         }),
