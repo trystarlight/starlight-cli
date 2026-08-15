@@ -41,7 +41,7 @@ describe("bounded driver update check", () => {
         endpoint: "https://app.trystarlight.io/.well-known/starlight-driver",
       }),
     ).resolves.toEqual({
-      installedVersion: "0.8.0",
+      installedVersion: "0.8.1",
       latestVersion: "0.9.0",
       minimumVersion: "0.7.0",
       updateAvailable: true,
@@ -99,7 +99,7 @@ describe("bounded driver update check", () => {
         timeoutMs: 10,
       }),
     ).resolves.toEqual({
-      installedVersion: "0.8.0",
+      installedVersion: "0.8.1",
       latestVersion: null,
       minimumVersion: null,
       updateAvailable: null,

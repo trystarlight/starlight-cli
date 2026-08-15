@@ -19,7 +19,7 @@ describe("published version contract", () => {
   it("ships the production compatibility floor and recommendation", () => {
     expect(STARLIGHT_DRIVER_COMPATIBILITY).toEqual({
       minimumVersion: "0.7.0",
-      recommendedVersion: "0.8.0",
+      recommendedVersion: "0.8.1",
     });
   });
 });

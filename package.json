@@ -1,6 +1,6 @@
 {
   "name": "@trystarlight/cli",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Connect a macOS user-owned Codex installation to Starlight.",
   "type": "module",
   "bin": {
