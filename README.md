@@ -31,7 +31,8 @@ Pairing grants this device scoped authority for one Starlight resource and works
 ## Commands
 
 ```text
-starlight auth login|complete|status|logout
+starlight auth login|complete|status
+starlight auth logout [--local-only] [--json]
 starlight driver install|start|stop|status|update|run
 starlight doctor [--json] [--strict]
 starlight version [--json]
@@ -46,6 +47,7 @@ Machine-readable commands emit one JSON object, or JSON Lines for `driver run --
 ## Recovery
 
 - Pairing expired or revoked: run `starlight auth logout`, then pair again.
+- Logout cannot revoke a stale credential from another workspace: run `starlight auth logout --local-only` to clear only this CLI's exact local Keychain pairing state, then run `starlight auth login`. This explicit recovery skips remote revocation and makes no network request. A still-valid remote credential may remain active until it is revoked in its original workspace or expires.
 - Driver offline after login or reboot: run `starlight driver status --json`, then `starlight driver start`.
 - Driver crashed: run `starlight doctor --json --strict`; the diagnostic contains a safe next command without credentials.
 - Upgrade: install the newer package through the same trusted npm channel, then run `starlight driver install --runtime codex` to refresh the LaunchAgent entry.

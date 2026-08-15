@@ -346,19 +346,32 @@ export class AgentBridgeClient {
       state?.credential !== undefined &&
       state.credential.expiresAt > this.now()
     ) {
-      const response = await this.fetcher(
-        `${state.apiUrl}/agent/v1/auth/revoke`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${state.credential.token}`,
-            "x-starlight-resource": resourceFor(state.webUrl),
+      try {
+        const response = await this.fetcher(
+          `${state.apiUrl}/agent/v1/auth/revoke`,
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${state.credential.token}`,
+              "x-starlight-resource": resourceFor(state.webUrl),
+            },
           },
-        },
-      );
-      if (!response.ok) {
+        );
+        if (!response.ok) throw new Error("Remote revocation was rejected");
+        const body = record(
+          await response.json(),
+          "Agent credential revocation",
+        );
+        if (
+          body["schemaVersion"] !== "starlight.agent-auth.v1" ||
+          body["status"] !== "revoked"
+        ) {
+          throw new Error("Remote revocation was not confirmed");
+        }
+      } catch (error) {
         throw new Error(
-          "Starlight could not revoke the remote credential; local access was preserved so logout can be retried",
+          "Starlight could not confirm remote credential revocation; local access was preserved so logout can be retried",
+          { cause: error },
         );
       }
     }
@@ -368,6 +381,27 @@ export class AgentBridgeClient {
       status: "succeeded" as const,
       connected: false,
       note: "Remote credential revoked and local agent credentials cleared.",
+    };
+  }
+
+  async clearLocalCredentials() {
+    try {
+      await this.store.clear();
+    } catch (error) {
+      throw new Error(
+        "Starlight could not clear local agent credentials; local recovery did not complete",
+        { cause: error },
+      );
+    }
+    return {
+      schemaVersion: "starlight.agent-auth.v1" as const,
+      status: "succeeded" as const,
+      connected: false,
+      remoteRevocation: "skipped" as const,
+      localCredentialsCleared: true,
+      note: "Local Starlight agent credentials and pending pairing state were cleared.",
+      warning:
+        "Remote revocation was skipped. A still-valid remote credential may remain active until revoked or expired.",
     };
   }
 
